@@ -319,6 +319,25 @@ function inputSqrt() {
   show();
 }
 
+/** 四舍五入键：把当前显示的数取整。 */
+function inputRound() {
+  if (isError()) {
+    return;
+  }
+  canRepeat = false; // 一元运算改变了当前数，连算资格作废
+
+  const value = Number(text);
+  const result = Math.sign(value) * Math.round(Math.abs(value));
+  text = formatResult(result);
+
+  if (text === ERROR_TEXT) {
+    clearState();
+    showSub('');
+  }
+
+  show();
+}
+
 /** 百分号键：加减时按左操作数的百分之几计算，乘除时直接转成小数。 */
 function inputPercent() {
   if (isError()) {
@@ -682,7 +701,7 @@ const LAYOUT = [
   ['4', 'digit'], ['5', 'digit'], ['6', 'digit'], ['÷', 'operator'],
   ['1', 'digit'], ['2', 'digit'], ['3', 'digit'], ['×', 'operator'],
   ['0', 'digit'], ['−', 'operator'], ['+', 'operator'], ['=', 'equals'],
-  ['.', 'decimal'], ['00', 'digit'], ['⌫', 'backspace'], ['CE', 'clearEntry'], ['√', 'sqrt'],
+  ['.', 'decimal'], ['00', 'digit'], ['⌫', 'backspace'], ['CE', 'clearEntry'], ['√', 'sqrt'], ['四舍五入', 'sqrt'],
   ['x²', 'square'],
   ['1/x', 'reciprocal'],
   ['π', 'pi'],
@@ -731,6 +750,9 @@ LAYOUT.forEach(([label, kind]) => {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = `key ${KEY_CLASS[kind]}`;
+  if (label === '四舍五入') {
+    button.classList.add('key--round');
+  }
   button.textContent = label;
   button.addEventListener('click', () => {
     if (kind === 'trig' && HYPERBOLIC_FNS.has(label)) { // #143 新增：双曲函数键转交独立处理
@@ -751,7 +773,11 @@ LAYOUT.forEach(([label, kind]) => {
     } else if (kind === 'clearEntry') {
       inputClearEntry();
     } else if (kind === 'sqrt') {
-      inputSqrt();
+      if (label === '四舍五入') {
+        inputRound();
+      } else {
+        inputSqrt();
+      }
     } else if (kind === 'square') {
       inputSquare();
     } else if (kind === 'reciprocal') {
