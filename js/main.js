@@ -1267,6 +1267,7 @@ function inputOddEven(){
   // 判断是否为整数
   if (!Number.isInteger(num)) {
     text = "仅支持整数";
+    waiting = true; // 下一次数字输入覆盖主屏，避免「仅支持整数5」
     showSub('');
     show();
     return;
@@ -1277,6 +1278,7 @@ function inputOddEven(){
   } else {
     text = '奇数';
   }
+  waiting = true; // 下一次数字输入覆盖主屏，避免「奇数5」
   showSub('');
   show();
 }
