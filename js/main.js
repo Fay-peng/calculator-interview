@@ -1289,6 +1289,46 @@ oddEvenBtn.textContent = '奇 / 偶';
 oddEvenBtn.addEventListener('click', inputOddEven);
 keyboard.appendChild(oddEvenBtn);
 
+/**
+ * 阶乘 n! 按钮点击处理（#194）
+ * 对主屏上当前的非负整数计算阶乘；小数、负数置错误
+ * 依赖：formatResult / show / isError / canRepeat
+ * @input 主屏text显示的当前数值
+ */
+function inputFactorial() {
+  // 如果计算器当前已经处于错误状态，直接返回不处理
+  if (isError()) {
+    return;
+  }
+  // 执行一元运算之后禁止继续连等重复运算
+  canRepeat = false;
+  const value = Number(text);
+
+  // 阶乘只允许非负整数；负数或者小数返回错误
+  if (!Number.isInteger(value) || value < 0) {
+    text = formatResult(NaN);
+    show();
+    return;
+  }
+
+  // 循环求阶乘，0! = 1
+  let res = 1;
+  for (let i = 2; i <= value; i++) {
+    res *= i;
+  }
+
+  // 回写主屏并且刷新显示
+  text = formatResult(res);
+  show();
+}
+
+// 渲染【n!】阶乘按钮，追加到屏幕键盘
+const factorialBtn = document.createElement('button');
+factorialBtn.type = 'button';
+factorialBtn.className = 'key key--action';
+factorialBtn.textContent = 'n!';
+factorialBtn.addEventListener('click', inputFactorial);
+keyboard.appendChild(factorialBtn);
 
 // =========================================
 // 新增：度 / 分 / 秒（° ′ ″）三个按键 —— 纯叠加，既有逻辑零改动
