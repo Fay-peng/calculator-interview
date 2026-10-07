@@ -440,7 +440,7 @@ def md_table(counter: Dict[str, int], empty: str = "_（无数据）_") -> str:
     return "\n".join(lines) + "\n"
 
 
-def roster_tables(roster: Dict[str, Any]) -> str:
+def roster_tables(roster: Dict[str, Any], recent_events: int = 15) -> str:
     active_lines = [
         "| 审核人 | 加入时间 | 状态 |",
         "| --- | --- | --- |",
@@ -470,7 +470,7 @@ def roster_tables(roster: Dict[str, Any]) -> str:
     ev = roster.get("events") or []
     if ev:
         parts += ["### 最近进退事件", ""]
-        for e in ev[-15:][::-1]:
+        for e in ev[-recent_events:][::-1]:
             parts.append(
                 f"- `{e.get('at')}` **{e.get('type')}** @{e.get('login')} — {e.get('note', '')}"
             )
@@ -571,13 +571,20 @@ def render_daily_digest(data: Dict[str, Any], sync_notes: List[str]) -> str:
             "### 今日各审核人",
             "",
             people,
-            "_Actions 自动发送 · 北京时间每天 21:00_",
+            "---",
+            "",
+            "## 🗂️ 当日总花名册快照",
+            "",
+            roster_tables(data["roster"], recent_events=5),
+            "_Actions 自动发送 · 北京时间每天 21:00 · 当天重复触发只更新本条_",
             "",
         ]
     )
 
 
-def upsert_marked_comment(marker: str, body: str, replace: bool = False) -> None:
+def upsert_marked_comment(
+    marker: str, body: str, replace: bool = False, digest_date: str | None = None
+) -> None:
     """Update only comments we own; otherwise POST a new one (never PATCH others')."""
     comments = gh_paginate(f"/repos/{REPO}/issues/{ISSUE_NUMBER}/comments")
     owned = token_actor_logins()
@@ -587,8 +594,21 @@ def upsert_marked_comment(marker: str, body: str, replace: bool = False) -> None
         if marker in (c.get("body") or "")
         and ((c.get("user") or {}).get("login") or "") in owned
     ]
-    # 日报始终追加新评论
+    # 日报按天去重：当天已有 → PATCH 那条；否则 POST（一天多次触发不刷屏）
     if marker == DIGEST_MARKER and not replace:
+        if digest_date:
+            dated = f"审核日报 {digest_date}"
+            today = next(
+                (c for c in mine if dated in (c.get("body") or "")), None
+            )
+            if today:
+                gh_api(
+                    f"/repos/{REPO}/issues/comments/{today['id']}",
+                    method="PATCH",
+                    body={"body": body},
+                )
+                print(f"updated daily digest comment {today['id']} for {digest_date}")
+                return
         gh_api(
             f"/repos/{REPO}/issues/{ISSUE_NUMBER}/comments",
             method="POST",
@@ -666,7 +686,10 @@ def main() -> None:
         upsert_marked_comment(MARKER, render_dashboard(data, sync_notes), replace=True)
         if POST_DIGEST:
             upsert_marked_comment(
-                DIGEST_MARKER, render_daily_digest(data, sync_notes), replace=False
+                DIGEST_MARKER,
+                render_daily_digest(data, sync_notes),
+                replace=False,
+                digest_date=data["local_date"],
             )
 
 
