@@ -1792,6 +1792,334 @@ soundButton.addEventListener('click', () => {
 
 keyboard.appendChild(soundButton);
 
+// =========================================================
+// 新增：二阶 / 三阶行列式（det2 / det3）
+//
+// 用法：点 det2 → 依次输入 4 个数（逗号分隔）→ 点 ] → 点 = 得到结果
+//      点 det3 → 依次输入 9 个数（逗号分隔）→ 点 ] → 点 = 得到结果
+// 负数：在 [ 或 , 之后按 − ；也可先输数字再按 ± 翻转当前数字段
+// 小数：直接点 .
+// 采用「按 = 计算」方案，不做右括号自动计算，规避正则提前匹配的坑。
+//
+// 实现方式与本仓度分秒、音效功能的写法一致：纯追加。
+//   · 按钮只在文件末尾 append，不往 LAYOUT 里加 kind；
+//   · 用捕获阶段的 click / keydown 委托，只在录入行列式时接管按键，
+//     不命中就原样放行；既有分发逻辑与既有函数签名一律不动。
+// =========================================================
+
+/** 是否正在录入一个还没闭合的行列式（det2… / det3…，且还没出现 ]）。 */
+function detIsTyping() {
+  return /^det[23]/.test(text) && text.indexOf(']') === -1;
+}
+
+/** 主屏当前是不是一个行列式表达式（含已闭合、待按 = 的状态）。 */
+function detIsExpression() {
+  return /^det[23]/.test(text);
+}
+
+/** 副屏提示：副屏相关函数不存在时静默跳过，便于跨版本复用。 */
+function detSub(message) {
+  if (typeof showSub === 'function') {
+    showSub(message);
+  }
+}
+
+/** 结果格式化：优先用本仓既有的 formatResult，保证显示口径一致。 */
+function detFormat(value) {
+  if (typeof formatResult === 'function') {
+    return formatResult(value);
+  }
+  return String(Number(value.toPrecision(12)));
+}
+
+/**
+ * 解析并计算行列式表达式。
+ * @param {string} raw 主屏文本
+ * @returns {null | { ok: true, value: number } | { ok: false, reason: string }}
+ *   不是行列式表达式时返回 null（交回原来的四则运算）。
+ */
+function detParse(raw) {
+  const s = String(raw).replace(/\s+/g, '');
+  const m = s.match(/^det([23])\[([^\]]*)\]$/);
+  if (!m) {
+    return null;
+  }
+
+  const order = Number(m[1]);
+  const need = order === 2 ? 4 : 9;
+  const parts = m[2] === '' ? [] : m[2].split(',');
+
+  if (parts.length !== need) {
+    return { ok: false, reason: `det${order} 需要 ${need} 个数字，当前 ${parts.length} 个` };
+  }
+
+  const nums = [];
+  for (let k = 0; k < parts.length; k += 1) {
+    const item = parts[k].trim();
+    // 只接受十进制整数 / 小数（可带负号），拒绝 1e3、0x10 之类的伪装
+    if (!/^-?\d+(\.\d+)?$/.test(item)) {
+      return { ok: false, reason: '元素必须是数字' };
+    }
+    nums.push(Number(item));
+  }
+
+  if (order === 2) {
+    const [a, b, c, d] = nums;
+    return { ok: true, value: a * d - b * c }; // det2 = ad − bc
+  }
+
+  const [a, b, c, d, e, f, g, h, i] = nums;
+  return {
+    ok: true,
+    // 标准三阶展开：a(ei−fh) − b(di−fg) + c(dh−eg)
+    value: a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g),
+  };
+}
+
+/** det2 / det3 键：清好状态，写入模板，只输入文字不计算。 */
+function detStart(order) {
+  if (typeof clearState === 'function') {
+    clearState();
+  }
+  parenStack.length = 0;
+  canRepeat = false;
+  text = `det${order}[`;
+  waiting = false;
+  detSub(`录入 det${order}[...]：逗号分隔 ${order === 2 ? 4 : 9} 个数，末尾点 ] 再按 =`);
+  show();
+}
+
+/** 逗号键：行列式元素分隔符。 */
+function detComma() {
+  if (!detIsTyping()) {
+    return;
+  }
+  text += ',';
+  show();
+}
+
+/** 右方括号键：只补一个 ]，不计算；真正求值交给 = 键。 */
+function detClose() {
+  if (!detIsTyping()) {
+    return;
+  }
+  text += ']';
+  show();
+}
+
+/** 小数点键：只判断「当前数字段」有没有小数点，支持逐段录入小数。 */
+function detDot() {
+  const segment = text.split(/[\[,]/).pop();
+  if (segment.includes('.')) {
+    return;
+  }
+  text += '.';
+  show();
+}
+
+/** − 键：在 [ 或 , 之后当负号写入；其它位置忽略，避免污染表达式。 */
+function detMinus() {
+  const last = text.slice(-1);
+  if (last !== '[' && last !== ',') {
+    return;
+  }
+  text += '-';
+  show();
+}
+
+/** ± 键：只翻转「当前数字段」的正负号，不动 det2[ / 逗号 结构。 */
+function detPlusMinus() {
+  const lastSep = Math.max(text.lastIndexOf('['), text.lastIndexOf(','));
+  const segment = text.slice(lastSep + 1);
+  if (segment === '' || segment === '-') {
+    return; // 还没有可翻转的数字
+  }
+  text = text.slice(0, lastSep + 1) + (segment.startsWith('-') ? segment.slice(1) : `-${segment}`);
+  show();
+}
+
+/**
+ * 按 = 时先试行列式。
+ * @returns {boolean} true 表示已处理（拦下既有四则运算），false 表示这不是行列式表达式
+ */
+function detTryEvaluate() {
+  const det = detParse(text);
+  if (det === null) {
+    // 看起来像行列式但还没写完整：给个提示，不静默失败
+    if (detIsExpression()) {
+      detSub('行列式格式：det2[a,b,c,d] 或 det3[a,…,i]，末尾补 ] 再按 =');
+      return true;
+    }
+    return false;
+  }
+
+  if (!det.ok) {
+    detSub(`行列式：${det.reason}`);
+    return true;
+  }
+
+  const clean = text.replace(/\s+/g, '');
+  const shown = detFormat(det.value);
+  if (typeof ERROR_TEXT !== 'undefined' && shown === ERROR_TEXT) {
+    detSub('行列式结果无效');
+    return true;
+  }
+
+  if (typeof recordHistory === 'function') {
+    recordHistory(`${clean} =`, shown);
+  }
+  text = shown;
+  if (typeof clearState === 'function') {
+    clearState();
+  }
+  parenStack.length = 0;
+  canRepeat = false;
+  waiting = true;
+  detSub(`${clean} =`);
+  show();
+  return true;
+}
+
+// ---------------------------------------------------------
+// 行列式按键：追加到键盘网格末尾
+// 沿用既有 .key .key--action 样式，不新增 LAYOUT kind
+// （static-check 白名单未收录新 kind，会掉进最终 else 误走 =）
+// ---------------------------------------------------------
+const detOwnButtons = [];
+
+[
+  ['det2', () => detStart(2)],
+  ['det3', () => detStart(3)],
+  [',', detComma],
+  [']', detClose],
+].forEach(([label, handler]) => {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'key key--action';
+  button.textContent = label;
+  button.addEventListener('click', handler);
+  detOwnButtons.push(button);
+  keyboard.appendChild(button);
+});
+
+// 录入行列式期间放行的按键：数字、小数点、正负号、逗号、右方括号，
+// 以及随时能清空重来的 ⌫ / C / CE。其余按键（运算符、函数键、存储器键…）
+// 在这段时间里一律不响应，免得把表达式搞坏。
+const detInputAllowed = new Set([
+  '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '00',
+  '.', '±', '−', ',', ']', '⌫', 'C', 'CE',
+]);
+
+const detBlockedHint = '行列式录入中：只能输入数字、小数点、逗号与 ]（C / CE / ⌫ 可清空）';
+
+// ---------------------------------------------------------
+// 事件委托：录入行列式时接管几个关键按键
+// capture 阶段先于既有分发逻辑执行，命中才拦截，未命中一律放行
+// ---------------------------------------------------------
+keyboard.addEventListener(
+  'click',
+  (event) => {
+    const btn = event.target && event.target.closest ? event.target.closest('button') : null;
+    if (!btn || detOwnButtons.indexOf(btn) !== -1) {
+      return; // 不是按键，或就是行列式自己的按键（由各自 handler 处理）
+    }
+
+    const label = btn.textContent;
+
+    if (label === '=') {
+      // = 不能只看「录入中」：末尾点了 ] 之后就不算录入中了，
+      // 但那时才是真正要计算的状态。不是行列式表达式时返回 false，原样放行。
+      if (detTryEvaluate()) {
+        event.stopPropagation();
+      }
+      return;
+    }
+
+    if (!detIsExpression()) {
+      return; // 主屏不是行列式表达式，全部交回既有逻辑
+    }
+
+    if (detIsTyping()) {
+      if (label === '.') {
+        detDot();
+        event.stopPropagation();
+        return;
+      }
+      if (label === '±') {
+        detPlusMinus();
+        event.stopPropagation();
+        return;
+      }
+      if (label === '−') {
+        detMinus();
+        event.stopPropagation();
+        return;
+      }
+      if (detInputAllowed.has(label)) {
+        return; // 数字 / 00 / 逗号 / ] / ⌫ / C / CE：照常走既有逻辑
+      }
+    } else if (label === '⌫' || label === 'C' || label === 'CE') {
+      return; // 表达式已闭合：只允许退格与清空，等用户按 = 或重来
+    }
+
+    detSub(detBlockedHint); // 会污染表达式的键：忽略并说明原因
+    event.stopPropagation();
+  },
+  true,
+);
+
+document.addEventListener(
+  'keydown',
+  (event) => {
+    const key = event.key;
+
+    // = / Enter：命中行列式表达式就拦下算行列式，否则原样放行给既有逻辑
+    if (key === '=' || key === 'Enter') {
+      if (detTryEvaluate()) {
+        event.stopPropagation();
+        event.preventDefault();
+      }
+      return;
+    }
+
+    if (!detIsExpression()) {
+      return; // 与行列式无关，物理键盘全部走既有逻辑
+    }
+
+    if (!detIsTyping()) {
+      // 表达式已闭合：只放行退格与 C，其余忽略，等用户按 = 或清空重来
+      if (key === 'Backspace' || key === 'Escape' || key.toLowerCase() === 'c') {
+        return;
+      }
+      detSub(detBlockedHint);
+      event.stopPropagation();
+      event.preventDefault();
+      return;
+    }
+
+    let handled = true;
+    if (key === ',') {
+      detComma();
+    } else if (key === ']') {
+      detClose();
+    } else if (key === '.') {
+      detDot();
+    } else if (key === '-') {
+      detMinus();
+    } else if (key === '+' || key === '*' || key === '/') {
+      detSub(detBlockedHint); // 录入期间的运算符：忽略，避免污染表达式
+    } else {
+      handled = false; // 数字、退格、C 等照常交给既有逻辑
+    }
+
+    if (handled) {
+      event.stopPropagation();
+      event.preventDefault();
+    }
+  },
+  true,
+);
+
 // 事件委托：监听整个键盘区的 click 冒泡，所有按键（含以后新增的）自动发声。
 // 这样完全不用改 LAYOUT 与上面已有的 click 处理逻辑。
 keyboard.addEventListener('click', (e) => {
