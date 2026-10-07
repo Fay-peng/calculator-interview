@@ -104,13 +104,30 @@ def iso(ts: dt.datetime) -> str:
     return ts.astimezone(TZ).isoformat()
 
 
-def gh_request(url: str, method: str = "GET", body: Dict[str, Any] | None = None) -> Any:
+def fmt_cn(value: Any) -> str:
+    """Human-readable Beijing time with 时分秒, e.g. 2026-10-07 21:35:52."""
+    if isinstance(value, dt.datetime):
+        ts = value
+    else:
+        ts = parse_ts(str(value) if value else None)
+    if not ts:
+        return "-"
+    return ts.astimezone(TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def gh_request(
+    url: str,
+    method: str = "GET",
+    body: Dict[str, Any] | None = None,
+    token: Optional[str] = None,
+) -> Any:
     data = None if body is None else json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Accept", "application/vnd.github+json")
     req.add_header("X-GitHub-Api-Version", "2022-11-28")
-    if GH_TOKEN:
-        req.add_header("Authorization", f"Bearer {GH_TOKEN}")
+    auth = token if token is not None else GH_TOKEN
+    if auth:
+        req.add_header("Authorization", f"Bearer {auth}")
     if body is not None:
         req.add_header("Content-Type", "application/json")
     try:
@@ -122,8 +139,13 @@ def gh_request(url: str, method: str = "GET", body: Dict[str, Any] | None = None
         raise GhApiError(f"{method} {url} -> {e.code}: {err}") from e
 
 
-def gh_api(path: str, method: str = "GET", body: Dict[str, Any] | None = None) -> Any:
-    return gh_request(f"https://api.github.com{path}", method, body)
+def gh_api(
+    path: str,
+    method: str = "GET",
+    body: Dict[str, Any] | None = None,
+    token: Optional[str] = None,
+) -> Any:
+    return gh_request(f"https://api.github.com{path}", method, body, token=token)
 
 
 def gh_graphql(query: str, variables: Dict[str, Any] | None = None) -> Any:
@@ -134,12 +156,12 @@ def gh_graphql(query: str, variables: Dict[str, Any] | None = None) -> Any:
     )
 
 
-def gh_paginate(path: str) -> List[Any]:
+def gh_paginate(path: str, token: Optional[str] = None) -> List[Any]:
     items: List[Any] = []
     page = 1
     while True:
         sep = "&" if "?" in path else "?"
-        chunk = gh_api(f"{path}{sep}per_page=100&page={page}")
+        chunk = gh_api(f"{path}{sep}per_page=100&page={page}", token=token)
         if not chunk:
             break
         if not isinstance(chunk, list):
@@ -266,7 +288,7 @@ def sync_roster_with_team(roster: Dict[str, Any], team_logins: Set[str]) -> List
         events.append(
             {"type": "join", "login": login, "at": iso(ts), "note": "检测到加入 reviewers team"}
         )
-        changes.append(f"加入 @{login}（{iso(ts)}）")
+        changes.append(f"加入 @{login}（{fmt_cn(ts)}）")
 
     # leaves: open tenure but not in team
     for m in members:
@@ -284,7 +306,7 @@ def sync_roster_with_team(roster: Dict[str, Any], team_logins: Set[str]) -> List
                 "note": "检测到退出 reviewers team，此后 Review 不计",
             }
         )
-        changes.append(f"退出 @{login}（{iso(ts)}）— 此后不计")
+        changes.append(f"退出 @{login}（{fmt_cn(ts)}）— 此后不计")
 
     roster["members"] = members
     roster["events"] = events[-200:]  # keep last 200 events
@@ -293,10 +315,22 @@ def sync_roster_with_team(roster: Dict[str, Any], team_logins: Set[str]) -> List
 
 
 def fetch_team_logins() -> Set[str]:
+    """List reviewers team. Prefer STATS_TEAM_TOKEN (PAT can read org teams);
+    Actions GITHUB_TOKEN often 404s → fall back to STATS_TEAM env."""
     owner = REPO.split("/", 1)[0]
+    team_token = (
+        os.environ.get("STATS_TEAM_TOKEN")
+        or os.environ.get("GH_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+        or ""
+    )
     try:
-        members = gh_paginate(f"/orgs/{owner}/teams/reviewers/members")
-        return {m["login"] for m in members}
+        members = gh_paginate(
+            f"/orgs/{owner}/teams/reviewers/members", token=team_token or None
+        )
+        logins = {m["login"] for m in members}
+        print(f"team-sync: live reviewers team = {len(logins)} members", file=sys.stderr)
+        return logins
     except GhApiError as exc:
         print("warn: cannot list reviewers team:", exc, file=sys.stderr)
         fallback = {
@@ -304,6 +338,10 @@ def fetch_team_logins() -> Set[str]:
             for u in os.environ.get("STATS_TEAM", "").split(",")
             if u.strip()
         }
+        print(
+            f"team-sync: using STATS_TEAM fallback ({len(fallback)} members)",
+            file=sys.stderr,
+        )
         return fallback
 
 
@@ -442,22 +480,22 @@ def md_table(counter: Dict[str, int], empty: str = "_（无数据）_") -> str:
 
 def roster_tables(roster: Dict[str, Any], recent_events: int = 15) -> str:
     active_lines = [
-        "| 审核人 | 加入时间 | 状态 |",
+        "| 审核人 | 加入时间（北京） | 状态 |",
         "| --- | --- | --- |",
     ]
     left_lines = [
-        "| 审核人 | 加入时间 | 退出时间 | 说明 |",
+        "| 审核人 | 加入时间（北京） | 退出时间（北京） | 说明 |",
         "| --- | --- | --- | --- |",
     ]
     has_left = False
     for m in sorted(roster.get("members", []), key=lambda x: x.get("login") or ""):
         login = m.get("login")
-        joined = m.get("joined") or "-"
+        joined = fmt_cn(m.get("joined"))
         left = m.get("left")
         if left:
             has_left = True
             left_lines.append(
-                f"| @{login} | {joined} | {left} | 退出后 Review **不计** |"
+                f"| @{login} | {joined} | {fmt_cn(left)} | 退出后 Review **不计** |"
             )
         else:
             active_lines.append(f"| @{login} | {joined} | 在册 |")
@@ -472,7 +510,7 @@ def roster_tables(roster: Dict[str, Any], recent_events: int = 15) -> str:
         parts += ["### 最近进退事件", ""]
         for e in ev[-recent_events:][::-1]:
             parts.append(
-                f"- `{e.get('at')}` **{e.get('type')}** @{e.get('login')} — {e.get('note', '')}"
+                f"- `{fmt_cn(e.get('at'))}` **{e.get('type')}** @{e.get('login')} — {e.get('note', '')}"
             )
         parts.append("")
     return "\n".join(parts)
@@ -505,15 +543,18 @@ def render_dashboard(data: Dict[str, Any], sync_notes: List[str]) -> str:
             + "\n"
         )
 
+    refreshed = fmt_cn(data["generated_at"])
     return "\n".join(
         [
             MARKER,
             "## 📊 审核次数自动统计",
             "",
+            f"> **上次刷新（北京时间）**：`{refreshed}`",
+            "",
             f"- 仓库：`{data['repo']}`",
             f"- 本地日：`{data['local_date']}`（Asia/Shanghai）",
-            f"- 切割：`{data['cutoff']}`",
-            f"- 生成：`{data['generated_at']}`",
+            f"- 切割：`{fmt_cn(data['cutoff'])}`",
+            f"- 生成时刻：`{refreshed}`（时分秒）",
             f"- **今日**：审核动作 **{data['reviews_today']}** 次 · 涉及 PR **{data['prs_reviewed_today']}** 个",
             f"- **累计**（在册期间）：审核动作 **{data['reviews_total']}** 次 · 涉及 PR **{data['prs_reviewed_total']}** 个",
             "",
@@ -561,7 +602,7 @@ def digest_new_members(roster: Dict[str, Any], local_date: str) -> str:
     for m in sorted(roster.get("members", []), key=lambda x: x.get("joined") or ""):
         joined = parse_ts(m.get("joined"))
         if joined and day0 <= joined < day1:
-            lines.append(f"- @{m.get('login')}（加入于 `{iso(joined)}`）")
+            lines.append(f"- @{m.get('login')}（加入于 `{fmt_cn(joined)}`）")
     if not lines:
         return "_今日无新成员加入_"
     return "\n".join(lines)
@@ -572,15 +613,19 @@ def render_daily_digest(data: Dict[str, Any], sync_notes: List[str]) -> str:
     sync = ""
     if sync_notes:
         sync = "### 今日花名册变更\n\n" + "\n".join(f"- {x}" for x in sync_notes) + "\n\n"
+    refreshed = fmt_cn(data["generated_at"])
     return "\n".join(
         [
             DIGEST_MARKER,
             f"## 📅 审核日报 {data['local_date']}",
             "",
+            f"> **本条更新（北京时间）**：`{refreshed}`",
+            "",
             f"- **今日审核动作**：{data['reviews_today']}",
             f"- **今日涉及 PR 数**：{data['prs_reviewed_today']}",
             f"- **累计审核动作**：{data['reviews_total']}",
             f"- **累计涉及 PR 数**：{data['prs_reviewed_total']}",
+            f"- 生成时刻：`{refreshed}`（时分秒）",
             "",
             "> 计：正式 Review + 讨论区评论（同 PR 每人 1 次）+ 帮忙关他人 PR；机器人 / 自评不计。",
             "",
