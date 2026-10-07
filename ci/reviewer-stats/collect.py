@@ -550,6 +550,23 @@ def render_dashboard(data: Dict[str, Any], sync_notes: List[str]) -> str:
     )
 
 
+def digest_new_members(roster: Dict[str, Any], local_date: str) -> str:
+    """当日新加入的成员（joined 落在 local_date 当天，Asia/Shanghai）。
+
+    按 roster 里的 joined 时间戳统计全天，多次触发不漏报。
+    """
+    day0 = dt.datetime.fromisoformat(f"{local_date}T00:00:00+08:00")
+    day1 = day0 + dt.timedelta(days=1)
+    lines = []
+    for m in sorted(roster.get("members", []), key=lambda x: x.get("joined") or ""):
+        joined = parse_ts(m.get("joined"))
+        if joined and day0 <= joined < day1:
+            lines.append(f"- @{m.get('login')}（加入于 `{iso(joined)}`）")
+    if not lines:
+        return "_今日无新成员加入_"
+    return "\n".join(lines)
+
+
 def render_daily_digest(data: Dict[str, Any], sync_notes: List[str]) -> str:
     people = md_table(data["today"], "_今日尚无 Review_")
     sync = ""
@@ -571,6 +588,10 @@ def render_daily_digest(data: Dict[str, Any], sync_notes: List[str]) -> str:
             "### 今日各审核人",
             "",
             people,
+            "### 今日新加入成员",
+            "",
+            digest_new_members(data["roster"], data["local_date"]),
+            "",
             "---",
             "",
             "## 🗂️ 当日总花名册快照",
