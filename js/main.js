@@ -2207,3 +2207,566 @@ PERMUTATION_KEYS.forEach(([label, op, hint]) => {
   button.addEventListener('click', () => inputOperator(op));
   keyboard.insertBefore(button, keyboard.lastElementChild);
 });
+
+// =================================================================
+// 新增：分数输入与分数 ⇄ 小数切换（纯追加，不改动上方任何既有代码）
+//
+// 两个键：
+//   a/b   分数键：第一次按下取当前数为分子，输入分母后再按一次合成分数
+//   F⇄D   切换键：在当前结果的小数形式与分数形式之间来回切换
+//
+// ----------------------------------------------------------------
+// 关键设计：数值读取的统一防护（复审第 1、2 条意见的修法）
+//
+// 主屏以分数形式显示时 text === "3/4"，直接 Number(text) 会得到 NaN。
+// 既有代码里有 20+ 处 Number(text)，分散在 inputOperator / inputEquals /
+// inputSqrt / inputPercent 等一堆函数里，它们全都假设 text 是纯数字。
+//
+// 第一版只靠「捕获阶段的事件监听」在按键前还原，这有个致命弱点：
+// 正确性依赖「事件一定先命中这个监听」。一旦事件被 stopPropagation 拦下、
+// 或某条路径是代码内部直接调用而非用户点击，防护就漏了，立刻 NaN。
+//
+// 现在改成两层，正确性不再依赖事件：
+//   第 1 层（兜底，必须）：读取前置。
+//     把所有会读 Number(text) 的既有函数入口统一包一层（见文件末尾
+//     installFractionGuards），进函数前先自愈。无论从哪条路径进来都拦得住。
+//   第 2 层（提前量，可选）：事件前置。
+//     保留捕获阶段监听，只是让还原发生得更早、UI 更即时。
+//     即使把这段监听整段删掉，第 1 层依然保证不出 NaN。
+//
+// 另外提供 readDisplayValue() 作为统一读取入口：新增代码要读主屏数值时
+// 一律走它，它会还原分数并把 NaN / Infinity 收敛成 null。
+// 全程纯追加：不动显示区 DOM、不改既有函数签名、不引第三方依赖。
+// ----------------------------------------------------------------
+
+/** 最近一次产生或识别出来的分数，形如 { n: 3, d: 4 }。 */
+let fracValue = null;
+/** 主屏当前是否正以分数形式显示。 */
+let showingFraction = false;
+/** 分数输入进度：0 = 未开始，1 = 已取分子、等待分母。 */
+let fracStage = 0;
+/** fracStage === 1 时暂存的分子。 */
+let fracNum = null;
+
+/** 手动输入分数时允许的最大分母。 */
+const FRAC_MAX_DEN = 1e6;
+/**
+ * 「小数自动转分数」时允许的最大分母，比上面小得多。
+ * 否则 π 会被转成 103993/33102 这种虽然精确但没法看的分数，
+ * 判为「无法精确表示」反而更符合预期。
+ */
+const FRAC_AUTO_MAX_DEN = 1e4;
+/** 判定「等于」的容差：1e-9 足以挡掉 0.1 + 0.2 那类浮点长尾。 */
+const FRAC_TOL = 1e-9;
+
+/** 辗转相除求最大公约数（约分用）。分母不会为 0，返回 1 兜底。 */
+function gcdInt(a, b) {
+  let x = Math.abs(a);
+  let y = Math.abs(b);
+  while (y) {
+    const t = x % y;
+    x = y;
+    y = t;
+  }
+  return x || 1;
+}
+
+/** 把 { n, d } 写成「3/4」；分母为 1 时只写整数；负号统一放在分子。 */
+function formatFraction(frac) {
+  if (!frac) {
+    return '';
+  }
+  if (frac.d === 1) {
+    return String(frac.n);
+  }
+  return `${frac.n}/${frac.d}`;
+}
+
+/**
+ * 小数 → 分数：连分数展开，取第一个落在容差内的渐近分数。
+ * 转不出来（无理数或分母过大）返回 null，由调用方给出提示。
+ * @param {number} value 待转换的小数
+ * @param {number} maxDen 允许的最大分母，默认 FRAC_AUTO_MAX_DEN
+ * @returns {{n: number, d: number}|null} 最简分数，无法精确表示时返回 null
+ */
+function toFraction(value, maxDen = FRAC_AUTO_MAX_DEN) {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  if (value === 0) {
+    return { n: 0, d: 1 };
+  }
+  const sign = value < 0 ? -1 : 1;
+  const x = Math.abs(value);
+
+  let p0 = 0;
+  let q0 = 1;
+  let p1 = 1;
+  let q1 = 0;
+  let b = x;
+
+  for (let i = 0; i < 64; i += 1) {
+    const a = Math.floor(b);
+    const p = a * p1 + p0;
+    const q = a * q1 + q0;
+    if (q !== 0 && q <= maxDen && Math.abs(x - p / q) <= FRAC_TOL) {
+      const g = gcdInt(p, q);
+      return { n: sign * (p / g), d: q / g };
+    }
+    p0 = p1;
+    q0 = q1;
+    p1 = p;
+    q1 = q;
+    if (q1 > maxDen) {
+      return null;
+    }
+    const rest = b - a;
+    if (rest < 1e-12) {
+      break;
+    }
+    b = 1 / rest;
+  }
+  return null;
+}
+
+/**
+ * 一个数的小数位数（用于把小数分子/分母放大成整数）。
+ * 科学计数法（1e-7 会写成 "1e-7"）不参与缩放，返回 0 交给后续兜底。
+ * @param {number} v
+ * @returns {number}
+ */
+function decimalsOf(v) {
+  const s = String(v);
+  if (!s.includes('.') || s.includes('e') || s.includes('E')) {
+    return 0;
+  }
+  const tail = s.split('.')[1] || '';
+  return /^\d+$/.test(tail) ? tail.length : 0;
+}
+
+/** 缩放时允许的最大小数位数，超出就按「无法表示」处理，避免溢出成天文数字。 */
+const FRAC_MAX_SCALE = 12;
+
+/**
+ * 由分子分母合成一个约分后的分数。
+ * 分子或分母是小数时（如 3 / 0.4），先把两边同时放大成整数再约分，
+ * 否则 3 / 0.4 会算出 27021597764222976/3602879701896397 这种浮点垃圾。
+ * @param {number} n 分子
+ * @param {number} d 分母
+ * @returns {{n: number, d: number}|null} 分母为 0 或非法时返回 null
+ */
+function makeFraction(n, d) {
+  if (!Number.isFinite(n) || !Number.isFinite(d) || d === 0) {
+    return null;
+  }
+
+  // 小数 → 整数：两边同乘 10^k（如 3 / 0.4 → 30 / 4 → 15 / 2）
+  const k = Math.min(Math.max(decimalsOf(n), decimalsOf(d)), FRAC_MAX_SCALE);
+  if (k > 0) {
+    const factor = 10 ** k;
+    n = Math.round(n * factor);
+    d = Math.round(d * factor);
+  }
+  if (!Number.isInteger(n) || !Number.isInteger(d) || d === 0) {
+    return null;
+  }
+
+  if (Math.abs(d) > FRAC_MAX_DEN) {
+    return null; // 分母大到没意义，按非法输入处理
+  }
+  if (d < 0) {
+    n = -n;
+    d = -d; // 负号统一挪到分子，避免出现 3/-4
+  }
+  const g = gcdInt(n, d);
+  return { n: n / g, d: d / g };
+}
+
+/**
+ * 把主屏从分数形式还原成小数。
+ * 幂等：非分数态直接返回，可以在任何入口反复调用而不产生副作用。
+ * 所有会读 Number(text) 的地方都应在读取前调用它（见 installFractionGuards）。
+ * 注意：这里不动 fracStage —— 正在等分母时按数字是正常输入，不能清进度。
+ */
+function restoreFractionDisplay() {
+  if (!showingFraction || !fracValue) {
+    return;
+  }
+  showingFraction = false;
+  // 主屏若已被键盘区之外的逻辑改写（如历史回填先把结果塞了进来），
+  // 说明这个分数已经过期：只丢掉分数状态，绝不能把人家刚填的值覆盖掉。
+  if (text === formatFraction(fracValue)) {
+    text = formatResult(fracValue.n / fracValue.d);
+    show();
+  }
+}
+
+/**
+ * 统一数值读取入口（复审意见 1）。
+ * 既有代码里的 Number(text) 散落各处且假设 text 一定是纯数字，
+ * 这里统一收敛成两步：先确保分数已还原，再把 NaN / Infinity 挡掉。
+ * 新增代码要读主屏数值时请一律走这里，不要再直接 Number(text)。
+ * @returns {number|null} 合法数字；主屏不是数字时返回 null
+ */
+function readDisplayValue() {
+  restoreFractionDisplay();
+  const value = Number(text);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** 放弃尚未完成的分数输入进度（按了数字/小数点以外的键时调用）。 */
+function cancelFractionInput() {
+  fracStage = 0;
+  fracNum = null;
+}
+
+/**
+ * 正在等分母时，按这些键属于「还在输分母」，不能取消分数输入：
+ * 数字、小数点、负号（输 -4 做分母）、正负号、退格（输错重改）。
+ * 其余键（运算符、等号、清除、功能键）一律视为放弃输入。
+ * @param {string} label 键面文字；物理键盘传 e.key
+ * @returns {boolean}
+ */
+function isFractionInputKey(label) {
+  return (
+    /^[0-9.]$/.test(label)
+    || label === '00' // 双零键同样是「在输分母」
+    || label === '-' // 物理键盘的负号：输 -4 做分母（复审意见 3）
+    || label === '±'
+    || label === '⌫'
+    || label === 'Backspace'
+  );
+}
+
+/**
+ * 等分母时切换分母的正负号。
+ *
+ * 这里必须拦下既有的取负 / 减号逻辑，不能交给它们处理：
+ *   - 交给 inputOperator('−')：'-' 会被当成二元运算符，直接启动一次减法，
+ *     分子被塞进 acc，分数输入进度作废 —— 物理键盘永远输不出负分母。
+ *   - 交给 inputPlusMinus()：它读的是「当前主屏的值」，而此刻主屏还是分子，
+ *     取负改的是分子；随后按数字时 waiting 又把主屏整个替换掉，负号照样丢。
+ * 所以负号由分数模块自己接管：先落到主屏，后面的数字接着往它后面拼。
+ */
+function toggleDenominatorSign() {
+  if (waiting) {
+    // 分母还没开始输：负号先占住主屏，后面的数字接着往它后面拼
+    text = '-';
+    waiting = false;
+  } else if (isDenominatorUnfinished()) {
+    // 只输了负号就又按一次：撤掉，回到「还没输分母」的状态
+    text = INITIAL;
+    waiting = true;
+  } else if (text.startsWith('-')) {
+    text = text.slice(1); // 分母已经输进来了：负变正
+  } else {
+    text = `-${text}`; // 正变负
+  }
+  showSub(`${formatResult(fracNum)} / ?`);
+  show();
+}
+
+/** 分母是否只输了负号、数字还没进来（'-' 或空）。 */
+function isDenominatorUnfinished() {
+  return text === '' || text === '-' || text === '-.';
+}
+
+/** 修饰键本身不算输入，敲到它既不该中断分母输入，也没必要还原。 */
+const FRAC_MODIFIER_KEYS = new Set([
+  'Shift',
+  'Control',
+  'Alt',
+  'Meta',
+  'AltGraph',
+  'CapsLock',
+  'Tab',
+  'OS',
+]);
+
+/** a/b 键：第一次按下取分子，第二次按下合成分数。 */
+function inputFraction() {
+  if (isError()) {
+    return;
+  }
+  canRepeat = false; // 一元运算改变了当前数，旧的连算资格作废
+  restoreFractionDisplay(); // 主屏若正显示分数，先还原成小数再当分子用
+
+  if (fracStage === 1) {
+    // 第二次按下：分母还没真的输进来就当取消。
+    // waiting 仍是 true = 一个数字都没按；只按了 '-' = 负号还没跟上数字。
+    // 这两种情况都算「放弃」，不能当成 0 去算、更不能报错误。
+    if (waiting || isDenominatorUnfinished()) {
+      cancelFractionInput();
+      // 只按了负号、数字还没进来时主屏是个半成品 '-'，
+      // 清掉它再退出，免得下一位数字被拼成 '-5' 这种莫名其妙的值。
+      if (isDenominatorUnfinished()) {
+        text = INITIAL;
+        waiting = true;
+        show();
+      }
+      showSub('分数输入已取消');
+      return;
+    }
+    const den = readDisplayValue();
+    if (den === null) {
+      cancelFractionInput();
+      showSub('分数输入已取消');
+      return;
+    }
+    const frac = makeFraction(fracNum, den);
+    fracStage = 0;
+    fracNum = null;
+    if (!frac) {
+      text = ERROR_TEXT; // 分母为 0
+      clearState();
+      showSub('');
+      show();
+      return;
+    }
+    fracValue = frac;
+    showingFraction = true;
+    text = formatFraction(frac);
+    waiting = true; // 这是一个完整结果，下一个数字另起一轮
+    showSub(`= ${formatResult(frac.n / frac.d)}`);
+    show();
+    return;
+  }
+
+  const n = readDisplayValue();
+  if (n === null) {
+    showSub('分子无效，分数输入未开始');
+    return;
+  }
+  fracNum = n;
+  fracStage = 1;
+  waiting = true; // 下一个数字另起一轮，作为分母
+  showSub(`${formatResult(n)} / ?`);
+  show();
+}
+
+/** F⇄D 键：在当前结果的小数形式与分数形式之间切换。 */
+function toggleFractionDisplay() {
+  if (isError()) {
+    return;
+  }
+  if (fracStage === 1) {
+    return; // 正在等分母，不接受切换
+  }
+
+  if (showingFraction && fracValue) {
+    showingFraction = false;
+    text = formatResult(fracValue.n / fracValue.d);
+    showSub(`= ${formatFraction(fracValue)}`); // 分数形式挪到副屏备查
+    show();
+    return;
+  }
+
+  const value = readDisplayValue();
+  if (value === null) {
+    return;
+  }
+  const frac = toFraction(value);
+  if (!frac) {
+    showSub('无法精确表示为分数');
+    return;
+  }
+  fracValue = frac;
+  showingFraction = true;
+  text = formatFraction(frac);
+  showSub(`= ${formatResult(value)}`); // 小数形式挪到副屏备查
+  show();
+}
+
+// ---------------------------------------------------------------
+// 在键盘末尾追加两个键：沿用现有 .key .key--action 样式，
+// 不动 LAYOUT / KEY_CLASS / OPERATORS，也不碰既有按键的分发逻辑。
+// ---------------------------------------------------------------
+const fractionButton = document.createElement('button');
+fractionButton.type = 'button';
+fractionButton.className = 'key key--action';
+fractionButton.textContent = 'a/b';
+fractionButton.addEventListener('click', inputFraction);
+keyboard.appendChild(fractionButton);
+
+const fracToggleButton = document.createElement('button');
+fracToggleButton.type = 'button';
+fracToggleButton.className = 'key key--action';
+fracToggleButton.textContent = 'F⇄D';
+fracToggleButton.addEventListener('click', toggleFractionDisplay);
+keyboard.appendChild(fracToggleButton);
+
+// 捕获阶段监听：只是「提前量」，让还原发生在按键逻辑之前、UI 更即时。
+// 正确性不再依赖它 —— 下面每个函数的入口守卫（installFractionGuards）会兜底，
+// 即使这段监听完全不执行，也不会出现 Number("3/4") → NaN。
+keyboard.addEventListener('click', (e) => {
+  if (e.target === fractionButton || e.target === fracToggleButton) {
+    return; // 这两个键自己处理分数状态，跳过还原
+  }
+  const label = (e.target.textContent || '').trim();
+  // 等分母时按 ±：这是分母的负号，交给分数模块自己接管，
+  // 不能让既有的取负逻辑把分子给改了（捕获阶段拦下目标元素的监听器）。
+  if (fracStage === 1 && label === '±') {
+    e.stopPropagation();
+    e.preventDefault();
+    toggleDenominatorSign();
+    return;
+  }
+  restoreFractionDisplay();
+  if (!isFractionInputKey(label)) {
+    cancelFractionInput(); // 只有按数字/小数点才继续等分母，其余键放弃分数输入
+  }
+}, true);
+
+// 物理键盘同理。额外处理：等分母时按 '-' 是负分母的负号，
+// 必须拦在上游把它当成二元减号之前（上游的 keydown 在冒泡阶段，这里在捕获阶段）。
+document.addEventListener('keydown', (e) => {
+  const k = e.key || '';
+  if (FRAC_MODIFIER_KEYS.has(k)) {
+    return; // 单敲 Shift / Ctrl 这类不算输入，别把分母输入打断
+  }
+  if (fracStage === 1 && (k === '-' || k === '_')) {
+    e.stopPropagation();
+    e.preventDefault();
+    toggleDenominatorSign();
+    return;
+  }
+  restoreFractionDisplay();
+  if (!isFractionInputKey(k)) {
+    cancelFractionInput();
+  }
+}, true);
+
+// 键盘区之外的点击（历史回填、主题切换等）同样先还原分数：
+// 捕获阶段早于目标元素自身的监听器，所以还原之后再交给原逻辑改写主屏，
+// 不会出现「分数把刚回填的历史值顶掉」这类问题。
+document.addEventListener('click', (e) => {
+  if (keyboard && keyboard.contains(e.target)) {
+    return; // 键盘区由上面的监听统一处理，这里不重复
+  }
+  restoreFractionDisplay();
+  cancelFractionInput();
+}, true);
+
+// ---------------------------------------------------------------
+// 数值读取守卫（复审意见 2 的核心修法）
+//
+// 下面这些是既有代码里所有函数体内出现过 Number(text) 的函数。
+// 给它们统一套一层前置：进函数前先 restoreFractionDisplay()。
+// 不改签名、不动函数体、不删任何一行，只是在外部包一层。
+//
+// 效果：还原动作从「事件发生前」下沉到「读取发生的那一刻」。
+// 于是无论从哪条路径进来 —— 鼠标点击、物理键盘、代码内部直接调用、
+// 或者某条链路上的 stopPropagation 把事件监听绕过去了 —— 读取前
+// 主屏都一定是合法数字，不会再有 Number("3/4") → NaN。
+// 上面那几条事件监听因此降级为「提前量」，不再是正确性的唯一依靠。
+//
+// 维护约定：新增代码要读主屏数值请优先用 readDisplayValue()；
+// 若沿用 Number(text)，记得把函数名加进 FRAC_GUARDED_FN_NAMES。
+// ---------------------------------------------------------------
+
+/**
+ * 需要在读取 Number(text) 之前自动还原分数的既有函数名。
+ * 这些函数都会把主屏当纯数字读，等价于「分数必须已经还原」。
+ * inputPlusMinus 不在此列：它在等分母时另有语义，单独包装（见下）。
+ */
+const FRAC_GUARDED_FN_NAMES = [
+  'applyPending',
+  'inputOperator',
+  'inputEquals',
+  'inputSqrt',
+  'inputRound',
+  'inputPercent',
+  'inputSquare',
+  'inputReciprocal',
+  'inputAbs',
+  'inputTrig',
+  'inputArcTrig',
+  'inputMemoryAdd',
+  'inputMemorySubtract',
+  'inputHyperbolic',
+  'inputCube',
+  'inputOddEven',
+  'inputFactorial',
+  'dmsTake',
+  'dmsAbandon',
+  'inputDmsSecond',
+  // 注意 dmsAfter 不在此列：它被「每次点任何键都会跑」的旁路监听调用
+  // （见 main.js 里度分秒模块的 keyboard click / document keydown 监听）。
+  // 给它套守卫的话，a/b 刚把分数显示出来就会被它无条件还原成小数。
+  // 它只在「按了 = 且本次算式用过度分秒」时才读 Number(text)，
+  // 那种情况事件层已经先还原过了，不套守卫也不会读到 NaN。
+];
+
+/** 已装好守卫的函数，避免重复包装。 */
+const FRAC_GUARDED_FNS = new Set();
+
+/**
+ * 给一个既有函数套上「进来先还原分数」的前置逻辑。
+ *
+ * 这里只做还原，不顺带作废旧的输入进度：仓库里存在「每次点任何键都会被调用」
+ * 的旁路监听（如度分秒模块的 dmsAfter），在守卫里 cancel 会把正在进行的
+ * 分母输入误取消掉。取消属于交互语义，仍由上面的事件监听负责。
+ * @param {Function} fn 原函数
+ * @returns {Function} 包装后的函数
+ */
+function withFractionGuard(fn) {
+  return function fractionGuarded(...args) {
+    restoreFractionDisplay();
+    return fn.apply(this, args);
+  };
+}
+
+/**
+ * 安装守卫：把列表里的函数替换成带前置防护的版本。
+ * 名字对不上（函数被重命名或移除）就跳过 —— 守卫是保险，不能反过来把主体搞崩。
+ */
+function installFractionGuards() {
+  const global = typeof window === 'undefined' ? null : window;
+  if (!global) {
+    return;
+  }
+
+  FRAC_GUARDED_FN_NAMES.forEach((name) => {
+    if (FRAC_GUARDED_FNS.has(name)) {
+      return;
+    }
+    const fn = global[name];
+    if (typeof fn !== 'function') {
+      return;
+    }
+    global[name] = withFractionGuard(fn);
+    FRAC_GUARDED_FNS.add(name);
+  });
+
+  // 减号：等分母时它是「负分母的负号」，不是二元减法。
+  // 放在函数入口而不是事件层，这样即便按键事件被拦下或顺序颠倒也照样生效。
+  const baseOperator = global.inputOperator;
+  if (typeof baseOperator === 'function') {
+    const guarded = withFractionGuard(baseOperator);
+    global.inputOperator = function fractionAwareInputOperator(op) {
+      if (fracStage === 1 && (op === '−' || op === '-')) {
+        toggleDenominatorSign();
+        return;
+      }
+      return guarded.call(this, op);
+    };
+    FRAC_GUARDED_FNS.add('inputOperator');
+  }
+
+  // ±：等分母时它切的是分母的正负，不是给当前主屏值取负
+  // （此刻主屏还是分子，取负后马上会被随后输入的数字整个替换掉，负号必丢）。
+  const basePlusMinus = global.inputPlusMinus;
+  if (typeof basePlusMinus === 'function') {
+    const guarded = withFractionGuard(basePlusMinus);
+    global.inputPlusMinus = function fractionAwareInputPlusMinus() {
+      if (fracStage === 1) {
+        toggleDenominatorSign();
+        return;
+      }
+      return guarded.apply(this, arguments);
+    };
+    FRAC_GUARDED_FNS.add('inputPlusMinus');
+  }
+}
+
+installFractionGuards();
