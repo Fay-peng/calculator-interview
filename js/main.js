@@ -2770,3 +2770,105 @@ function installFractionGuards() {
 }
 
 installFractionGuards();
+
+// =========================================================
+// 新增：主题皮肤切换（深空 / 浅色 / 薄荷 / 暖阳）
+//
+// 入口两个，作用都是「轮播到下一套皮肤」：
+//   · 键盘区「皮肤」按钮；
+//   · 物理键盘 T 键（Shift+T 同样有效）。
+// 选择写进 localStorage，下次打开还是同一套；读不出或写不进
+// （无痕模式、禁用存储）就退回默认皮肤，绝不影响计算结果。
+//
+// 配色本身全部写在 css/style.css 的 [data-theme="…"] 里，
+// 这里只负责给 <html> 挂 data-theme ＋ 记忆选择，因此：
+//   · 不动显示区 DOM 结构、不改既有函数签名（CT1）；
+//   · 不装包、不引 CDN、不加构建工具（CT0）；
+//   · 纯追加，未改动上方任何既有代码。
+// =========================================================
+
+/** 可选皮肤；id 对应 css/style.css 里的 [data-theme="id"]。 */
+const THEMES = [
+  { id: 'dark', name: '深空' },
+  { id: 'light', name: '浅色' },
+  { id: 'mint', name: '薄荷' },
+  { id: 'amber', name: '暖阳' },
+];
+
+const THEME_STORAGE_KEY = 'calculator-theme';
+const THEME_ROOT = document.documentElement;
+const THEME_DEFAULT = THEMES[0];
+
+/**
+ * 按 id 取皮肤；id 不在清单里（存的是旧皮肤名、被人手改过）返回 null。
+ * @param {string|null} id 皮肤 id
+ * @returns {{id: string, name: string}|null} 命中的皮肤，或未命中
+ */
+function themeFind(id) {
+  return THEMES.find((theme) => theme.id === id) || null;
+}
+
+/** 读出上次用的皮肤；读不到返回 null。 */
+function themeRestore() {
+  try {
+    return themeFind(localStorage.getItem(THEME_STORAGE_KEY));
+  } catch (err) {
+    // localStorage 不可用（无痕模式 / 禁用存储）：退回默认皮肤
+    return null;
+  }
+}
+
+/** 记住当前皮肤；写不进去也不影响本次会话继续切换。 */
+function themeRemember(id) {
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, id);
+  } catch (err) {
+    // 存不下就算了，皮肤切换本身照样生效
+  }
+}
+
+let themeCurrent = THEME_DEFAULT;
+
+/**
+ * 应用一套皮肤。
+ * @param {{id: string, name: string}} theme 目标皮肤
+ * @param {boolean} announce 是否在副屏提示；启动时为 false，保证「副屏初始为空」
+ */
+function themeApply(theme, announce) {
+  themeCurrent = theme;
+  THEME_ROOT.setAttribute('data-theme', theme.id);
+  themeRemember(theme.id);
+  if (announce) {
+    showSub(`皮肤：${theme.name}（按 T 继续切换）`);
+  }
+}
+
+/** 轮播到下一套皮肤。 */
+function themeNext() {
+  const index = THEMES.indexOf(themeCurrent);
+  themeApply(THEMES[(index + 1) % THEMES.length], true);
+}
+
+// 皮肤键：追加在等号之前（同 nPr / nCr 的做法，不动 LAYOUT / KEY_CLASS）
+const themeButton = document.createElement('button');
+themeButton.type = 'button';
+themeButton.className = 'key key--theme';
+themeButton.textContent = '皮肤';
+themeButton.title = '主题皮肤切换（快捷键 T）';
+themeButton.addEventListener('click', themeNext);
+keyboard.insertBefore(themeButton, keyboard.lastElementChild);
+
+// 物理键盘 T 键：与上方已有的 keydown 监听并存，只接这一个键；
+// 带 Ctrl / Cmd / Alt 的组合（浏览器自身快捷键）与长按重复一律放行
+document.addEventListener('keydown', (event) => {
+  if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) {
+    return;
+  }
+  if (event.key === 't' || event.key === 'T') {
+    themeNext();
+    event.preventDefault();
+  }
+});
+
+// 启动：恢复上次的选择；没有记录就用默认皮肤，且不在副屏留字
+themeApply(themeRestore() || THEME_DEFAULT, false);
