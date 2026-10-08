@@ -32,6 +32,90 @@
   /* 悬停 / 按下叠加 */
   --key-active: rgba(0, 0, 0, .28);
   --hover-bg: rgba(255, 255, 255, .05);
+
+  /* 主题切换：告诉浏览器滚动条/表单该按深色还是浅色渲染 */
+  --scheme: dark;
+  /* 强调色：只用在「皮肤」键上，做入口识别 */
+  --accent: #8ab4f8;
+}
+
+/* ---------- 主题皮肤（由 js/main.js 切换 <html data-theme> 生效） ----------
+   默认深空＝上面的 :root，无需覆盖。
+   以下三套只覆盖同一批变量，因此显示区结构、字号、布局完全不动。
+   ---------- */
+[data-theme="light"] {
+  --bg: #f2f3f5;
+  --panel: #ffffff;
+  --display-bg: #f7f8fa;
+  --line: rgba(0, 0, 0, .08);
+  --line-strong: rgba(0, 0, 0, .18);
+
+  --text-primary: #1c1e21;
+  --text-secondary: #5f6368;
+  --text-tertiary: #8a9099;
+
+  --key-digit-bg: #e8eaed;    --key-digit-text: #1c1e21;
+  --key-sci-bg: #f1f3f4;      --key-sci-text: #444a51;
+  --key-mem-bg: #f1f3f4;      --key-mem-text: #6b7178;
+  --key-edit-bg: #f1f3f4;     --key-edit-text: #444a51;
+  --key-op-bg: #dfe3e8;       --key-op-text: #1c1e21;
+  --key-equals-bg: #1c1e21;   --key-equals-text: #ffffff;
+  --key-clear-bg: #f1f3f4;    --key-clear-text: #d13438;
+
+  --key-active: rgba(0, 0, 0, .10);
+  --hover-bg: rgba(0, 0, 0, .05);
+  --scheme: light;
+  --accent: #1a73e8;
+}
+
+[data-theme="mint"] {
+  --bg: #eef7f3;
+  --panel: #ffffff;
+  --display-bg: #e9f4ef;
+  --line: rgba(0, 0, 0, .08);
+  --line-strong: rgba(0, 0, 0, .16);
+
+  --text-primary: #12332a;
+  --text-secondary: #4e6b62;
+  --text-tertiary: #7a968d;
+
+  --key-digit-bg: #e2f0ea;    --key-digit-text: #12332a;
+  --key-sci-bg: #eef7f2;      --key-sci-text: #39655a;
+  --key-mem-bg: #eef7f2;      --key-mem-text: #5c8378;
+  --key-edit-bg: #eef7f2;     --key-edit-text: #39655a;
+  --key-op-bg: #d3e9df;       --key-op-text: #12332a;
+  --key-equals-bg: #1d9e75;   --key-equals-text: #ffffff;
+  --key-clear-bg: #eef7f2;    --key-clear-text: #b0462f;
+
+  --key-active: rgba(0, 0, 0, .10);
+  --hover-bg: rgba(0, 0, 0, .05);
+  --scheme: light;
+  --accent: #0f6e56;
+}
+
+[data-theme="amber"] {
+  --bg: #1a1410;
+  --panel: #241c16;
+  --display-bg: #1d1712;
+  --line: rgba(255, 255, 255, .08);
+  --line-strong: rgba(255, 255, 255, .18);
+
+  --text-primary: #f7efe6;
+  --text-secondary: #c3b4a6;
+  --text-tertiary: #9a8878;
+
+  --key-digit-bg: #332720;    --key-digit-text: #f7efe6;
+  --key-sci-bg: #2a211a;      --key-sci-text: #d6c6b6;
+  --key-mem-bg: #2a211a;      --key-mem-text: #a89684;
+  --key-edit-bg: #2a211a;     --key-edit-text: #d6c6b6;
+  --key-op-bg: #43342a;       --key-op-text: #ffffff;
+  --key-equals-bg: #f0a45c;   --key-equals-text: #2a1a0c;
+  --key-clear-bg: #2a211a;    --key-clear-text: #ef8b6e;
+
+  --key-active: rgba(0, 0, 0, .28);
+  --hover-bg: rgba(255, 255, 255, .05);
+  --scheme: dark;
+  --accent: #f0a45c;
 }
 
 body {
@@ -42,7 +126,7 @@ body {
   background: var(--bg);
   color: var(--text-primary);
   font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-  color-scheme: dark;
+  color-scheme: var(--scheme, dark);
 }
 
 /* ---------- 计算器面板 ---------- */
@@ -137,6 +221,10 @@ body {
 .key--operator { background-color: var(--key-op-bg);     color: var(--key-op-text); font-size: 17px; font-weight: 600; }
 .key--equals   { background-color: var(--key-equals-bg); color: var(--key-equals-text); font-size: 17px; font-weight: 600; grid-column: span 2; }
 .key--clear    { background-color: var(--key-clear-bg);  color: var(--key-clear-text); font-weight: 600; }
+
+/* 「皮肤」键：用强调色描边，和其它功能键一眼区分 */
+.key--theme    { background-color: var(--key-sci-bg);    color: var(--key-sci-text);
+                 box-shadow: inset 0 0 0 1px var(--accent); }
 
 /* 占位与个别标签适配 */
 .key--round { font-size: 16px; white-space: nowrap; }  /* 四舍五入标签较长 */
