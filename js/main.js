@@ -696,54 +696,47 @@ function inputMemoryClear() {
 // ---------------------------------------------------------------
 // 键盘渲染
 // ---------------------------------------------------------------
+// 按键按功能区排列：三角、表达式、单目运算、内存、编辑、数字键盘、工具行
 const LAYOUT = [
-  ['7', 'digit'], ['8', 'digit'], ['9', 'digit'], ['C', 'clear'],
-  ['4', 'digit'], ['5', 'digit'], ['6', 'digit'], ['÷', 'operator'],
-  ['1', 'digit'], ['2', 'digit'], ['3', 'digit'], ['×', 'operator'],
-  ['0', 'digit'], ['−', 'operator'], ['+', 'operator'], ['=', 'equals'],
-  ['.', 'decimal'], ['00', 'digit'], ['⌫', 'backspace'], ['CE', 'clearEntry'], ['√', 'sqrt'], ['四舍五入', 'sqrt'],
-  ['x²', 'square'],
-  ['1/x', 'reciprocal'],
-  ['π', 'pi'],
-  ['(', 'lparen'], [')', 'rparen'], // #43 新增：末行整行放左右括号
-  ['复制', 'copy'],
+  ['sin', 'trig'], ['cos', 'trig'], ['tan', 'trig'], ['DEG', 'angleMode'],
+  ['sin⁻¹', 'trig'], ['cos⁻¹', 'trig'], ['tan⁻¹', 'trig'], ['%', 'percent'],
+  ['sinh', 'trig'], ['cosh', 'trig'], ['tanh', 'trig'], ['±', 'plusMinus'],
+  ['(', 'lparen'], [')', 'rparen'], ['xʸ', 'operator'], ['ʸ√x', 'operator'],
+  ['√', 'sqrt'], ['x²', 'square'], ['1/x', 'reciprocal'], ['π', 'pi'],
   ['MC', 'mc'], ['MR', 'mr'], ['M+', 'mplus'], ['M−', 'mminus'],
-  ['%', 'percent'], // #33 新增：百分号键
-  ['sin', 'trig'], ['cos', 'trig'], ['tan', 'trig'], // 三角函数键
-  ['sin⁻¹', 'trig'], ['cos⁻¹', 'trig'], ['tan⁻¹', 'trig'], // 反三角函数键（复用 trig 类型）
-  ['sinh', 'trig'], ['cosh', 'trig'], ['tanh', 'trig'], // #143 新增：双曲函数键
-  ['DEG', 'angleMode'], // 角度/弧度切换键：键面文字随当前模式变化
-  ['xʸ', 'operator'], // 新增：任意次幂键
-  ['mod', 'operator'], // 新增：取余键
-  ['±', 'plusMinus'], // #102 新增：正负切换键
-  ['ʸ√x', 'operator'], // ← 新增：n 次方根键
-  ['a²+b²', 'operator'], // #151 新增：平方和键（标签沿用本仓 x² / xʸ / ʸ√x 的记号风格，4 列网格里中文标签会换行）
-  ['a²−b²', 'operator'], // #151 新增：平方差键
+  ['⌫', 'backspace'], ['CE', 'clearEntry'], ['C', 'clear'], ['复制', 'copy'],
+  ['7', 'digit'], ['8', 'digit'], ['9', 'digit'], ['÷', 'operator'],
+  ['4', 'digit'], ['5', 'digit'], ['6', 'digit'], ['×', 'operator'],
+  ['1', 'digit'], ['2', 'digit'], ['3', 'digit'], ['−', 'operator'],
+  ['00', 'digit'], ['0', 'digit'], ['.', 'decimal'],
+  ['+', 'operator'], ['四舍五入', 'sqrt'], ['a²+b²', 'operator'], ['a²−b²', 'operator'], ['mod', 'operator'],
+  ['=', 'equals'],
 ];
 
+// 按键样式类，按语义分组
 const KEY_CLASS = {
-  digit: 'key--normal',
-  operator: 'key--action',
-  clear: 'key--danger',
-  equals: 'key--success',
-  decimal: 'key--normal',
-  backspace: 'key--backspace',
-  clearEntry: 'key--danger',
-  sqrt: 'key--action',
-  square: 'key--action',
-  percent: 'key--action',
-  plusMinus: 'key--action',
-  reciprocal: 'key--action',
-  pi: 'key--action',
-  lparen: 'key--action', // #43 新增
-  rparen: 'key--action',
-  copy: 'key--action',
-  mc: 'key--action',
-  mr: 'key--action',
-  mplus: 'key--action',
-  mminus: 'key--action',
-  trig: 'key--action', // 三角函数键
-  angleMode: 'key--action', // 角度/弧度切换键
+  digit: 'key--digit',
+  decimal: 'key--digit',
+  operator: 'key--operator',
+  equals: 'key--equals',
+  clear: 'key--clear',
+  clearEntry: 'key--clear',
+  backspace: 'key--edit',
+  copy: 'key--edit',
+  sqrt: 'key--sci',
+  square: 'key--sci',
+  reciprocal: 'key--sci',
+  percent: 'key--sci',
+  plusMinus: 'key--sci',
+  pi: 'key--sci',
+  lparen: 'key--sci',
+  rparen: 'key--sci',
+  trig: 'key--sci',
+  angleMode: 'key--sci',
+  mc: 'key--mem',
+  mr: 'key--mem',
+  mplus: 'key--mem',
+  mminus: 'key--mem',
 };
 
 LAYOUT.forEach(([label, kind]) => {
@@ -1083,7 +1076,7 @@ function inputHex() {
 // #145 新增：在键盘网格末尾追加 BIN / OCT / HEX 三个转换键。
 // 不改动 LAYOUT / KEY_CLASS / 既有按键分发逻辑（develop 的 static-check
 // 白名单未收录新 kind，且本 PR 约束只改 js/main.js），按 README 增补条例
-// 「显示区之外要加按钮也可以」（CT1），沿用现有 .key .key--action 样式直接追加。
+// 「显示区之外要加按钮也可以」（CT1）；插在等号前收尾。
 const BASE_CONVERT_KEYS = [
   ['BIN', inputBinary],
   ['OCT', inputOctal],
@@ -1093,10 +1086,10 @@ const BASE_CONVERT_KEYS = [
 BASE_CONVERT_KEYS.forEach(([label, handler]) => {
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = 'key key--action';
+  button.className = 'key key--sci';
   button.textContent = label;
   button.addEventListener('click', handler);
-  keyboard.appendChild(button);
+  keyboard.insertBefore(button, keyboard.lastElementChild);
 });
 
 // =========================================
@@ -1115,15 +1108,15 @@ memoryIndicatorStyle.textContent = [
   '  display: none;',
   '  position: absolute;',
   '  top: 1px;',
-  '  left: 14px;',
-  '  width: 18px;',
-  '  height: 18px;',
-  '  line-height: 18px;',
+  '  left: 16px;',
+  '  width: 16px;',
+  '  height: 16px;',
+  '  line-height: 16px;',
   '  border-radius: 5px;',
-  '  background: var(--key-action);',
-  '  color: #fff;',
-  '  font-size: 12px;',
-  '  font-weight: bold;',
+  '  background: var(--key-op-bg);',
+  '  color: var(--key-op-text);',
+  '  font-size: 11px;',
+  '  font-weight: 600;',
   '  text-align: center;',
   '  cursor: default;',
   '}',
@@ -1204,17 +1197,17 @@ function inputCube() {
 
 const cubeButton = document.createElement('button');
 cubeButton.type = 'button';
-cubeButton.className = 'key key--action';
+cubeButton.className = 'key key--sci';
 cubeButton.textContent = 'x³';
 cubeButton.addEventListener('click', inputCube);
-keyboard.appendChild(cubeButton);
+keyboard.insertBefore(cubeButton, keyboard.lastElementChild);
 
 const absButton = document.createElement('button');
 absButton.type = 'button';
-absButton.className = 'key key--action';
+absButton.className = 'key key--sci';
 absButton.textContent = '|x|';
 absButton.addEventListener('click', inputAbs);
-keyboard.appendChild(absButton);
+keyboard.insertBefore(absButton, keyboard.lastElementChild);
 // =================================================================
 // 新增：随机数键 Rand（纯追加，不改动上方任何既有代码）
 //
@@ -1245,14 +1238,13 @@ function inputRandom() {
   show();
 }
 
-// 在键盘末尾追加 Rand 键：沿用现有 .key .key--action 样式，
-// 不动 LAYOUT / KEY_CLASS / OPERATORS，也不碰既有按键的分发逻辑。
+// 追加 Rand 键：不动 LAYOUT / KEY_CLASS / OPERATORS，也不碰既有按键的分发逻辑。
 const randomButton = document.createElement('button');
 randomButton.type = 'button';
-randomButton.className = 'key key--action';
+randomButton.className = 'key key--sci';
 randomButton.textContent = 'Rand';
 randomButton.addEventListener('click', inputRandom);
-keyboard.appendChild(randomButton);
+keyboard.insertBefore(randomButton, keyboard.lastElementChild);
 /**
  * 奇/偶 判断按键
  * 读取主屏当前数字，判断奇数/偶数
@@ -1286,10 +1278,10 @@ function inputOddEven(){
 // 渲染【奇 / 偶】按钮，追加到键盘
 const oddEvenBtn = document.createElement('button');
 oddEvenBtn.type = 'button';
-oddEvenBtn.className = 'key key--action';
+oddEvenBtn.className = 'key key--sci';
 oddEvenBtn.textContent = '奇 / 偶';
 oddEvenBtn.addEventListener('click', inputOddEven);
-keyboard.appendChild(oddEvenBtn);
+keyboard.insertBefore(oddEvenBtn, keyboard.lastElementChild);
 
 /**
  * 阶乘 n! 按钮点击处理（#194）
@@ -1327,10 +1319,10 @@ function inputFactorial() {
 // 渲染【n!】阶乘按钮，追加到屏幕键盘
 const factorialBtn = document.createElement('button');
 factorialBtn.type = 'button';
-factorialBtn.className = 'key key--action';
+factorialBtn.className = 'key key--sci';
 factorialBtn.textContent = 'n!';
 factorialBtn.addEventListener('click', inputFactorial);
-keyboard.appendChild(factorialBtn);
+keyboard.insertBefore(factorialBtn, keyboard.lastElementChild);
 
 // =========================================
 // 新增：度 / 分 / 秒（° ′ ″）三个按键 —— 纯叠加，既有逻辑零改动
@@ -1663,18 +1655,18 @@ document.addEventListener('keydown', (event) => {
   dmsAfter(physical);
 });
 
-// 三个键沿用既有 .key .key--action 样式追加（同 BIN/OCT/HEX 的做法，
+// 三个度分秒键追加在等号之前（同 BIN/OCT/HEX 的做法，
 // 不动 LAYOUT / KEY_CLASS——static-check 白名单未收录新 kind）
 [['°', inputDmsDegree, '度'], ['′', inputDmsMinute, '分'], ['″', inputDmsSecond, '秒']].forEach(
   ([label, handler, name]) => {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'key key--action';
+    button.className = 'key key--sci key--dms';
     button.textContent = label;
     button.title = `${name}（度分秒）`; // 悬停提示，不影响键面可访问名称
     button.addEventListener('click', handler);
     dmsButtons.push(button);
-    keyboard.appendChild(button);
+    keyboard.insertBefore(button, keyboard.lastElementChild);
   },
 );
 
@@ -1688,11 +1680,13 @@ document.addEventListener('keydown', (event) => {
 
 // 不同类别的按键给不同音高，听感上能区分数字 / 运算 / 清除
 const SOUND_TONES = {
-  'key--normal': 660, // 数字、小数点
-  'key--action': 520, // 运算符与一元运算
-  'key--success': 780, // 等号
-  'key--danger': 300, // 清除
-  'key--backspace': 420, // 退格
+  'key--digit': 660, // 数字、小数点
+  'key--operator': 520, // 运算符
+  'key--sci': 520, // 科学功能与一元运算
+  'key--mem': 520, // 内存
+  'key--edit': 420, // 退格、复制
+  'key--equals': 780, // 等号
+  'key--clear': 300, // 清除
 };
 const SOUND_DEFAULT_TONE = 600; // 物理键盘等无法归类时的默认音高
 
@@ -1766,8 +1760,8 @@ function playSoundForButton(button) {
 const soundButtonStyle = document.createElement('style');
 soundButtonStyle.textContent = [
   '.key--sound-on {',
-  '  background: #2f9e44;',
-  '  color: #fff;',
+  '  background: var(--key-op-bg);',
+  '  color: var(--key-op-text);',
   '}',
 ].join('\n');
 document.head.appendChild(soundButtonStyle);
@@ -1775,7 +1769,7 @@ document.head.appendChild(soundButtonStyle);
 // 音效开关按钮：默认关闭，点一下开启，副屏写明当前状态（与「复制」键的做法一致）
 const soundButton = document.createElement('button');
 soundButton.type = 'button';
-soundButton.className = 'key key--action';
+soundButton.className = 'key key--sci';
 soundButton.textContent = '音效 关';
 
 soundButton.addEventListener('click', () => {
@@ -1790,7 +1784,7 @@ soundButton.addEventListener('click', () => {
   }
 });
 
-keyboard.appendChild(soundButton);
+keyboard.insertBefore(soundButton, keyboard.lastElementChild);
 
 // 事件委托：监听整个键盘区的 click 冒泡，所有按键（含以后新增的）自动发声。
 // 这样完全不用改 LAYOUT 与上面已有的 click 处理逻辑。
@@ -1869,7 +1863,7 @@ function toSafeCount(value) {
 OPERATORS['nPr'] = (n, k) => (isValidArity(n, k) ? toSafeCount(permutationCount(n, k)) : NaN);
 OPERATORS['nCr'] = (n, k) => (isValidArity(n, k) ? toSafeCount(combinationCount(n, k)) : NaN);
 
-// 按键：沿用现有 .key .key--action 样式直接追加到键盘网格末尾（CT1：显示区之外可加按钮），
+// 按键：追加到等号之前（CT1：显示区之外可加按钮），
 // 不往 LAYOUT / KEY_CLASS 里加新 kind，避免动到既有按键分发逻辑
 const PERMUTATION_KEYS = [
   ['nPr', 'nPr', '排列数 A(n,k) = n!/(n−k)!'],
@@ -1879,9 +1873,9 @@ const PERMUTATION_KEYS = [
 PERMUTATION_KEYS.forEach(([label, op, hint]) => {
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = 'key key--action';
+  button.className = 'key key--sci';
   button.textContent = label;
   button.title = hint;
   button.addEventListener('click', () => inputOperator(op));
-  keyboard.appendChild(button);
+  keyboard.insertBefore(button, keyboard.lastElementChild);
 });
