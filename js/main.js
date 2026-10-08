@@ -1202,6 +1202,34 @@ cubeButton.textContent = 'x³';
 cubeButton.addEventListener('click', inputCube);
 keyboard.insertBefore(cubeButton, keyboard.lastElementChild);
 
+// =================================================================
+// 新增：立方根键 ∛（纯追加，不改动上方任何既有代码）
+//
+// 对当前主屏数字开三次方。与平方根不同，负数开立方在实数范围内
+// 有定义（如 ∛-8 = -2），因此不做负数报错分支，Math.cbrt 直接处理。
+// 不动显示区 DOM、不改既有函数签名、不引第三方依赖。
+// =================================================================
+
+/** 立方根键：对当前显示的数开三次方，负数同样有效。 */
+function inputCbrt() {
+  if (isError()) {
+    return;
+  }
+  canRepeat = false; // 一元运算改变了当前数，连算资格作废
+
+  const value = Number(text);
+  text = formatResult(Math.cbrt(value));
+  show();
+}
+
+const cbrtButton = document.createElement('button');
+cbrtButton.type = 'button';
+cbrtButton.className = 'key key--sci';
+cbrtButton.textContent = '∛';
+cbrtButton.addEventListener('click', inputCbrt);
+keyboard.insertBefore(cbrtButton, keyboard.lastElementChild);
+
+
 const absButton = document.createElement('button');
 absButton.type = 'button';
 absButton.className = 'key key--sci';
