@@ -39,6 +39,26 @@ function squareDiff(a, b) {
   return a * a - b * b;
 }
 /**
+  * 取模：求 a 除以 b 的余数
+  * @param {number} a 被除数
+  * @param {number} b 除数
+  * @returns {number} 余数
+  */
+ function mod(a, b) {
+   return a % b;
+ }
+ /**
+  * 平方根：求 x 的算术平方根
+  * @param {number} x 输入数字
+  * @returns {number|string} 平方根；x<0 返回非法输入
+  */
+ function sqrt(x) {
+   if (x < 0) {
+     return "非法输入";
+   }
+   return Math.sqrt(x);
+ }
+/**
  * 常用对数 log10
  * @param {number} x 输入数字
  * @returns {number|string} 以10为底的对数，x≤0返回非法输入
