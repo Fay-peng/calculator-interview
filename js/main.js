@@ -2904,3 +2904,36 @@ document.addEventListener('keydown', (event) => {
 
 // 启动：恢复上次的选择；没有记录就用默认皮肤，且不在副屏留字
 themeApply(themeRestore() || THEME_DEFAULT, false);
+
+/** MS：用当前数值覆盖内存，保留正在输入的算式。 */
+function inputMemoryStore() {
+  if (isError()) {
+    return;
+  }
+  const value = readDisplayValue();
+  if (!Number.isFinite(value)) {
+    return;
+  }
+  memory = value;
+  waiting = true;
+  updateMemoryIndicator();
+}
+
+const memoryStoreButton = document.createElement('button');
+memoryStoreButton.type = 'button';
+memoryStoreButton.className = 'key key--mem';
+memoryStoreButton.textContent = 'MS';
+memoryStoreButton.title = '内存存储：用当前数值覆盖内存';
+memoryStoreButton.addEventListener('click', inputMemoryStore);
+
+// 五个内存键共用一行，保留数字键盘的原有行列位置。
+const memoryButtons = Array.from(keyboard.querySelectorAll('.key--mem'));
+if (memoryButtons.length >= 2) {
+  const memoryRow = document.createElement('div');
+  memoryRow.className = 'keyboard__memory';
+  memoryRow.setAttribute('role', 'group');
+  memoryRow.setAttribute('aria-label', '内存键');
+  keyboard.insertBefore(memoryRow, memoryButtons[0]);
+  memoryButtons.forEach((button) => memoryRow.appendChild(button));
+  memoryRow.insertBefore(memoryStoreButton, memoryButtons[1]);
+}
