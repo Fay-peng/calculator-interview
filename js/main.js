@@ -2262,6 +2262,478 @@ document.addEventListener('keydown', (e) => {
   playKeyTone(SOUND_DEFAULT_TONE);
 });
 
+// =================================================================
+// 新增：复数运算（关联 Issue #205）
+//
+// 需求：支持解析含虚数单位 i 的输入（如 3+4i、5i），实现复数加、减、乘、
+//       除四则运算，输出标准复数格式 a + bi，并处理除零与非法表达式。
+//
+// 约束：本段为纯追加代码，不动上方任何既有逻辑，不改 index.html、不改
+//       css/style.css。由于页面原本没有文本输入框，这里用
+//       document.createElement 动态生成输入 UI（样式全部内联）。
+// =================================================================
+
+/**
+ * 数字精度清理：消除浮点运算的长尾误差（如 0.1 + 0.2 = 0.30000000000000004）。
+ * 同时把 -0 归一成 0，避免显示成 "-0"。
+ * @param {number} n
+ * @returns {number}
+ */
+function normalizeNumber(n) {
+  if (!Number.isFinite(n)) {
+    return n;
+  }
+  if (Object.is(n, -0)) {
+    return 0;
+  }
+  return Number(n.toPrecision(12));
+}
+
+/**
+ * 复数：由实部 real 与虚部 imag 构成，虚部省略写法的系数即 1。
+ * 内部封装复数的加、减、乘、除四则运算。
+ */
+class Complex {
+  /**
+   * @param {number} [real=0] 实部
+   * @param {number} [imag=0] 虚部
+   */
+  constructor(real = 0, imag = 0) {
+    this.real = normalizeNumber(real);
+    this.imag = normalizeNumber(imag);
+  }
+
+  /**
+   * 复数加法：(a+bi) + (c+di) = (a+c) + (b+d)i
+   * @param {Complex} o
+   * @returns {Complex}
+   */
+  add(o) {
+    return new Complex(this.real + o.real, this.imag + o.imag);
+  }
+
+  /**
+   * 复数减法：(a+bi) - (c+di) = (a-c) + (b-d)i
+   * @param {Complex} o
+   * @returns {Complex}
+   */
+  sub(o) {
+    return new Complex(this.real - o.real, this.imag - o.imag);
+  }
+
+  /**
+   * 复数乘法：(a+bi)(c+di) = (ac-bd) + (ad+bc)i
+   * @param {Complex} o
+   * @returns {Complex}
+   */
+  mul(o) {
+    return new Complex(
+      this.real * o.real - this.imag * o.imag,
+      this.real * o.imag + this.imag * o.real,
+    );
+  }
+
+  /**
+   * 复数除法：分子分母同乘分母的共轭。
+   *   (a+bi)/(c+di) = [(ac+bd) + (bc-ad)i] / (c²+d²)
+   * @param {Complex} o
+   * @returns {Complex|null} 除数为 0（c²+d²=0）时返回 null
+   */
+  div(o) {
+    const denom = o.real * o.real + o.imag * o.imag;
+    if (denom === 0) {
+      return null; // 除数为 0：0 与 0i 都是 0，无意义
+    }
+    return new Complex(
+      (this.real * o.real + this.imag * o.imag) / denom,
+      (this.imag * o.real - this.real * o.imag) / denom,
+    );
+  }
+}
+
+// ---------------------------------------------------------------
+// 表达式解析
+// ---------------------------------------------------------------
+// Issue 里给的正则示例 /^([+-]?\d*\.?\d*)([+-]?\d*\.?\d*)i$/ 只适用于
+// 「实部 + 虚部」一种写法：它拿 5i 去匹配会得到 real=5、imag=0（错），
+// 因为第一段 \d*\.?\d* 会把 5 吃掉。因此这里按「纯实数 / 纯虚数 / 完整」
+// 三种形态分别匹配，并统一要求必须有数字，避免 . 或 + 这类空壳被放过。
+
+/** 纯实数：3、-2.5、.5、+7 */
+const COMPLEX_REAL_RE = /^[+-]?(?:\d+\.?\d*|\.\d+)$/;
+/** 纯虚数：3i、-i、i、+2.5i —— 系数可省略（省略即 ±1） */
+const COMPLEX_IMAG_RE = /^([+-]?)(\d*\.?\d*)i$/;
+/** 完整形：3+4i、-3-4i、3+i、3-i */
+const COMPLEX_FULL_RE = /^([+-]?(?:\d+\.?\d*|\.\d+))([+-])(\d*\.?\d*)i$/;
+
+/**
+ * 把「虚部系数」字符串转成数字，空串按 1 处理（对应单独一个 i）。
+ * @param {string} coefStr
+ * @returns {number|null} 非法返回 null
+ */
+function imagCoefToNumber(coefStr) {
+  if (coefStr === '') {
+    return 1;
+  }
+  if (coefStr === '.') {
+    return null; // ".i" 这种不完整写法
+  }
+  const n = Number(coefStr);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * 解析复数表达式字符串。
+ * @param {string} raw 用户输入，如 "3+4i"、"5i"、"-i"、"2.5"
+ * @returns {{ok: true, value: Complex} | {ok: false, reason: string}}
+ */
+function parseComplex(raw) {
+  // 允许用户带空格输入，如 "3 + 4i"
+  const s = String(raw === null || raw === undefined ? '' : raw).replace(/\s+/g, '');
+  if (s === '') {
+    return { ok: false, reason: '错误：请输入复数' };
+  }
+
+  // 形态一：纯实数
+  if (COMPLEX_REAL_RE.test(s)) {
+    const real = Number(s);
+    if (!Number.isFinite(real)) {
+      return { ok: false, reason: '错误：数值超出范围' };
+    }
+    return { ok: true, value: new Complex(real, 0) };
+  }
+
+  // 形态二：纯虚数
+  let m = COMPLEX_IMAG_RE.exec(s);
+  if (m) {
+    const sign = m[1] === '-' ? -1 : 1;
+    const coef = imagCoefToNumber(m[2]);
+    if (coef === null) {
+      return { ok: false, reason: '错误：非法表达式' };
+    }
+    return { ok: true, value: new Complex(0, sign * coef) };
+  }
+
+  // 形态三：实部 + 虚部
+  m = COMPLEX_FULL_RE.exec(s);
+  if (m) {
+    const real = Number(m[1]);
+    const sign = m[2] === '-' ? -1 : 1;
+    const coef = imagCoefToNumber(m[3]);
+    if (coef === null) {
+      return { ok: false, reason: '错误：非法表达式' };
+    }
+    if (!Number.isFinite(real)) {
+      return { ok: false, reason: '错误：数值超出范围' };
+    }
+    return { ok: true, value: new Complex(real, sign * coef) };
+  }
+
+  // 其余一律拦截：i+++、3++4i、abc、3+4（缺 i）等
+  return { ok: false, reason: '错误：非法表达式' };
+}
+
+/**
+ * 把复数格式化为标准写法 a + bi。
+ * 规则：虚部为 0 时只给实部；实部为 0 时只给虚部；系数 ±1 省略数字。
+ * @param {Complex} c
+ * @returns {string} 如 "3 + 4i"、"3 - 4i"、"4i"、"-i"、"7"、"0"
+ */
+function formatComplex(c) {
+  const real = normalizeNumber(c.real);
+  const imag = normalizeNumber(c.imag);
+
+  // 虚部为 0 → 退化成实数
+  if (imag === 0) {
+    return String(real);
+  }
+
+  // 实部为 0 → 只保留虚部
+  if (real === 0) {
+    if (imag === 1) {
+      return 'i';
+    }
+    if (imag === -1) {
+      return '-i';
+    }
+    return imag + 'i';
+  }
+
+  // 实部与虚部都不为 0 → 拼接，符号用空格分隔，系数 ±1 省掉数字
+  const sign = imag > 0 ? ' + ' : ' - ';
+  const absImag = Math.abs(imag);
+  const imagText = absImag === 1 ? '' : String(absImag);
+  return real + sign + imagText + 'i';
+}
+
+/**
+ * 按运算符计算两个复数。
+ * @param {Complex} left
+ * @param {string} op  '+' | '-' | '*' | '/'
+ * @param {Complex} right
+ * @returns {Complex|null} 除数为 0 时返回 null
+ */
+function computeComplex(left, op, right) {
+  if (op === '+') {
+    return left.add(right);
+  }
+  if (op === '-') {
+    return left.sub(right);
+  }
+  if (op === '*') {
+    return left.mul(right);
+  }
+  if (op === '/') {
+    return left.div(right);
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------
+// 输入 UI：页面原本没有文本输入框，这里动态生成
+// （Issue 要求不修改 HTML，故全部用 createElement + 内联样式）
+// ---------------------------------------------------------------
+const complexPanel = document.createElement('section');
+complexPanel.id = 'complex-panel';
+complexPanel.setAttribute('aria-label', '复数运算区');
+complexPanel.style.marginTop = '16px';
+complexPanel.style.padding = '12px';
+complexPanel.style.borderRadius = '12px';
+complexPanel.style.background = 'rgba(255,255,255,0.92)';
+complexPanel.style.textAlign = 'center';
+
+// 标题
+const complexTitle = document.createElement('h3');
+complexTitle.textContent = '复数运算';
+complexTitle.style.margin = '0 0 8px';
+complexTitle.style.fontSize = '14px';
+complexTitle.style.color = '#334155';
+complexPanel.appendChild(complexTitle);
+
+/** 生成一个带标签的输入框。 */
+function createComplexField(labelText, placeholder, initial) {
+  const wrap = document.createElement('label');
+  wrap.style.flex = '1';
+  wrap.style.display = 'flex';
+  wrap.style.alignItems = 'center';
+  wrap.style.gap = '4px';
+  wrap.style.fontSize = '13px';
+  wrap.style.color = '#334155';
+
+  const span = document.createElement('span');
+  span.textContent = labelText;
+  // 标签不许折行：面板窄时「复数 A」会被压成竖排的「复/数/A」，很难看
+  span.style.whiteSpace = 'nowrap';
+  span.style.flexShrink = '0';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.inputMode = 'text';
+  input.value = initial;
+  input.placeholder = placeholder;
+  input.setAttribute('aria-label', labelText);
+  input.style.width = '100%';
+  input.style.minWidth = '0';
+  input.style.padding = '4px 6px';
+  input.style.border = '1px solid #9aa4bd';
+  input.style.borderRadius = '6px';
+  input.style.fontSize = '13px';
+  input.style.background = '#fff';
+  input.style.color = '#020202';
+
+  wrap.appendChild(span);
+  wrap.appendChild(input);
+  return { wrap, input };
+}
+
+// 输入行：复数A  [运算符]  复数B
+const complexForm = document.createElement('div');
+complexForm.style.display = 'flex';
+complexForm.style.gap = '8px';
+complexForm.style.alignItems = 'center';
+complexForm.style.marginBottom = '8px';
+
+const fieldA = createComplexField('复数 A', '如 3+4i', '3+4i');
+complexForm.appendChild(fieldA.wrap);
+
+const complexOp = document.createElement('select');
+complexOp.setAttribute('aria-label', '运算符');
+[['+', '＋ 加'], ['-', '－ 减'], ['*', '× 乘'], ['/', '÷ 除']].forEach(([val, label]) => {
+  const opt = document.createElement('option');
+  opt.value = val;
+  opt.textContent = label;
+  complexOp.appendChild(opt);
+});
+complexOp.style.padding = '4px 6px';
+complexOp.style.border = '1px solid #9aa4bd';
+complexOp.style.borderRadius = '6px';
+complexOp.style.fontSize = '13px';
+complexOp.style.background = '#fff';
+complexOp.style.color = '#020202';
+complexForm.appendChild(complexOp);
+
+const fieldB = createComplexField('复数 B', '如 5i', '5i');
+complexForm.appendChild(fieldB.wrap);
+
+complexPanel.appendChild(complexForm);
+
+// 操作按钮行
+const complexActions = document.createElement('div');
+complexActions.style.display = 'flex';
+complexActions.style.gap = '8px';
+complexActions.style.marginBottom = '8px';
+
+const complexCalcBtn = document.createElement('button');
+complexCalcBtn.type = 'button';
+complexCalcBtn.className = 'complex-action-btn';
+complexCalcBtn.style.background = '#2f6fed';
+complexCalcBtn.style.color = '#ffffff';
+complexCalcBtn.textContent = '计算';
+complexCalcBtn.style.flex = '1';
+complexCalcBtn.style.padding = '6px 0';
+complexCalcBtn.style.border = 'none';
+complexCalcBtn.style.borderRadius = '8px';
+complexCalcBtn.style.cursor = 'pointer';
+// .key 带的是键盘按键字号（24px），这里必须显式压回面板尺度
+complexCalcBtn.style.fontSize = '14px';
+complexCalcBtn.style.fontWeight = '600';
+
+const complexClearBtn = document.createElement('button');
+complexClearBtn.type = 'button';
+complexClearBtn.className = 'complex-action-btn';
+complexClearBtn.style.background = '#e2e8f0';
+complexClearBtn.style.color = '#334155';
+// 注意：文案不能叫「清空」——历史记录面板已有一个「清空」按钮，
+// ci/smoke.spec.mjs 用 getByRole('button', { name: '清空' }) 全局选择历史那个，
+// 重名会让 Playwright strict mode 报「resolved to 2 elements」而挂掉 CI。
+complexClearBtn.textContent = '重置';
+complexClearBtn.style.flex = '1';
+complexClearBtn.style.padding = '6px 0';
+complexClearBtn.style.border = 'none';
+complexClearBtn.style.borderRadius = '8px';
+complexClearBtn.style.cursor = 'pointer';
+complexClearBtn.style.fontSize = '14px';
+complexClearBtn.style.fontWeight = '600';
+
+complexActions.appendChild(complexCalcBtn);
+complexActions.appendChild(complexClearBtn);
+complexPanel.appendChild(complexActions);
+
+// 结果行
+const complexResult = document.createElement('div');
+complexResult.setAttribute('aria-label', '复数运算结果');
+complexResult.style.minHeight = '24px';
+complexResult.style.fontSize = '14px';
+complexResult.style.fontWeight = '600';
+complexResult.style.lineHeight = '1.5';
+complexResult.style.color = '#334155';
+complexResult.style.wordBreak = 'break-all';
+complexPanel.appendChild(complexResult);
+
+// 用法提示
+const complexHint = document.createElement('div');
+complexHint.textContent = '支持写法：3+4i、3-4i、5i、-i、2.5（空格可省略，虚部系数 ±1 可省略）';
+complexHint.style.marginTop = '4px';
+complexHint.style.fontSize = '11.5px';
+complexHint.style.lineHeight = '1.5';
+complexHint.style.color = '#64748b';
+complexHint.style.wordBreak = 'break-all';
+complexPanel.appendChild(complexHint);
+
+// 挂到 main.calculator 内、#keyboard 之外。
+// 注意不能挂进 #keyboard —— 它是 4 列 grid，面板会被压成 1/4 宽。
+const complexHost = document.querySelector('main.calculator');
+if (complexHost) {
+  complexHost.appendChild(complexPanel);
+}
+
+// ---------------------------------------------------------------
+// 交互处理
+// ---------------------------------------------------------------
+/** 把结果行设为普通文本。 */
+function setComplexResult(text) {
+  complexResult.textContent = text;
+  complexResult.style.color = '#334155';
+}
+
+/** 把结果行设为错误样式。 */
+function setComplexError(text) {
+  complexResult.textContent = text;
+  complexResult.style.color = 'var(--key-danger)';
+}
+
+/** 点击「计算」：解析 → 运算 → 输出。 */
+function handleComplexCompute() {
+  const parsedA = parseComplex(fieldA.input.value);
+  if (!parsedA.ok) {
+    setComplexError('复数 A ' + parsedA.reason);
+    return;
+  }
+  const parsedB = parseComplex(fieldB.input.value);
+  if (!parsedB.ok) {
+    setComplexError('复数 B ' + parsedB.reason);
+    return;
+  }
+
+  const op = complexOp.value;
+  const result = computeComplex(parsedA.value, op, parsedB.value);
+  if (result === null) {
+    setComplexError('错误：除数不能为 0');
+    return;
+  }
+
+  const opText = { '+': '+', '-': '−', '*': '×', '/': '÷' }[op];
+  setComplexResult(
+    formatComplex(parsedA.value) + ' ' + opText + ' ' + formatComplex(parsedB.value) +
+      ' = ' + formatComplex(result),
+  );
+}
+
+/** 点击「清空」：清掉输入与结果（保留默认示例便于继续试）。 */
+function handleComplexClear() {
+  fieldA.input.value = '';
+  fieldB.input.value = '';
+  complexResult.textContent = '';
+  complexResult.style.color = '#334155';
+}
+
+complexCalcBtn.addEventListener('click', handleComplexCompute);
+complexClearBtn.addEventListener('click', handleComplexClear);
+
+// 初始先算一次，让面板一打开就有结果可看
+handleComplexCompute();
+
+// 供外部/测试调用
+if (typeof window !== 'undefined') {
+  window.Complex = Complex;
+  window.parseComplex = parseComplex;
+  window.formatComplex = formatComplex;
+  window.computeComplex = computeComplex;
+}
+
+// ---------------------------------------------------------------
+// 阻止输入框里的按键泄漏到计算器
+// 原文件的物理键盘监听挂在 document 上（约 774 行）且不判断事件目标，
+// 在输入框里打字会被它当成计算器输入。这里在捕获阶段拦下。
+// ---------------------------------------------------------------
+document.addEventListener(
+  'keydown',
+  (e) => {
+    const target = e.target;
+    if (!target || (target.tagName !== 'INPUT' && target.tagName !== 'SELECT')) {
+      return;
+    }
+    if (!complexPanel.contains(target)) {
+      return; // 只管本面板，其它输入框不干预
+    }
+    e.stopImmediatePropagation(); // 同节点同阶段需用 stopImmediatePropagation
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleComplexCompute();
+    }
+  },
+  true,
+);
 // =========================================
 // 新增：排列组合键 nPr / nCr
 // 排列数 A(n,k) = n!/(n−k)!，组合数 C(n,k) = n!/(k!(n−k)!)。
