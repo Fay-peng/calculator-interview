@@ -39,6 +39,26 @@ function squareDiff(a, b) {
   return a * a - b * b;
 }
 /**
+  * 取模：求 a 除以 b 的余数
+  * @param {number} a 被除数
+  * @param {number} b 除数
+  * @returns {number} 余数
+  */
+ function mod(a, b) {
+   return a % b;
+ }
+ /**
+  * 平方根：求 x 的算术平方根
+  * @param {number} x 输入数字
+  * @returns {number|string} 平方根；x<0 返回非法输入
+  */
+ function sqrt(x) {
+   if (x < 0) {
+     return "非法输入";
+   }
+   return Math.sqrt(x);
+ }
+/**
  * 常用对数 log10
  * @param {number} x 输入数字
  * @returns {number|string} 以10为底的对数，x≤0返回非法输入
@@ -1283,6 +1303,34 @@ cubeButton.className = 'key key--sci';
 cubeButton.textContent = 'x³';
 cubeButton.addEventListener('click', inputCube);
 keyboard.insertBefore(cubeButton, keyboard.lastElementChild);
+
+// =================================================================
+// 新增：立方根键 ∛（纯追加，不改动上方任何既有代码）
+//
+// 对当前主屏数字开三次方。与平方根不同，负数开立方在实数范围内
+// 有定义（如 ∛-8 = -2），因此不做负数报错分支，Math.cbrt 直接处理。
+// 不动显示区 DOM、不改既有函数签名、不引第三方依赖。
+// =================================================================
+
+/** 立方根键：对当前显示的数开三次方，负数同样有效。 */
+function inputCbrt() {
+  if (isError()) {
+    return;
+  }
+  canRepeat = false; // 一元运算改变了当前数，连算资格作废
+
+  const value = Number(text);
+  text = formatResult(Math.cbrt(value));
+  show();
+}
+
+const cbrtButton = document.createElement('button');
+cbrtButton.type = 'button';
+cbrtButton.className = 'key key--sci';
+cbrtButton.textContent = '∛';
+cbrtButton.addEventListener('click', inputCbrt);
+keyboard.insertBefore(cbrtButton, keyboard.lastElementChild);
+
 
 const absButton = document.createElement('button');
 absButton.type = 'button';
@@ -2987,3 +3035,91 @@ if (memoryButtons.length >= 2) {
   memoryButtons.forEach((button) => memoryRow.appendChild(button));
   memoryRow.insertBefore(memoryStoreButton, memoryButtons[1]);
 }
+
+
+// =========================================
+// 新增：科学计数法显示（自动 / 强制 两种模式，SCI 键切换）—— 纯叠加，既有逻辑零改动
+// -----------------------------------------------------------------
+// 思路：前面的函数都只通过 formatResult() 取显示文本，所以在这里把 formatResult
+//       包一层：数值超出常规范围（|n| ≥ 1e21 或 |n| < 1e-6）时改写成科学计数法
+//       形式（如 3.33333333333e-7），否则原样返回，保持既有观感不变。
+// 兼容：不改任何既有函数签名、不动显示区 DOM；SCI 键插入在等号之前，同皮肤键做法。
+// 依赖：formatResult / show / showSub / isError / text / keyboard
+// =========================================
+
+/** 科学计数法显示的阈值：达到或超过这个量级就用科学计数法 */
+const SCI_BIG = 1e21;
+/** 科学计数法显示的下限：绝对值非零且小于它就用科学计数法 */
+const SCI_SMALL = 1e-6;
+/** 科学计数法保留的有效数字位数：与既有 formatResult 的 12 位口径保持一致 */
+const SCI_SIGNIFICANT = 12;
+
+/** 当前是否为「强制科学计数法」；false 表示自动模式（默认） */
+let sciForce = false;
+
+/**
+ * 把一个数改写成科学计数法字符串。
+ * 先按既有 formatResult 的口径收到 12 位有效数字（保持一致，不引入新的精度标准），
+ * 再转成 e 形式；这样既不会像写死位数那样把 9.99999999998e+23 截断进位成 1e+24，
+ * 也不会甩出 3.3333333333333335e-7 这种过长的尾数。
+ * @param {number} n 目标数值（调用方保证有限）
+ * @returns {string} 如 1.23456789e+21、3.33333333333e-7
+ */
+function toScientific(n) {
+  return Number(n.toPrecision(SCI_SIGNIFICANT)).toExponential();
+}
+
+/**
+ * 判断一个数值是否应当以科学计数法显示。
+ * 0 永远走普通写法；错误态由上游 formatResult 处理，这里只管有限数。
+ * @param {number} n 待判断的数值
+ * @returns {boolean}
+ */
+function needScientific(n) {
+  if (!Number.isFinite(n) || n === 0) {
+    return false;
+  }
+  if (sciForce) {
+    return true;
+  }
+  const abs = Math.abs(n);
+  return abs >= SCI_BIG || abs < SCI_SMALL;
+}
+
+// 包一层 formatResult：保留原实现，只在需要科学计数法时改写返回值。
+// 用 const 记录原函数，既有调用点（OPERATORS、applyPending、各一元运算…）
+// 全部自动走到这里，无需逐个改。
+const formatResultPlain = formatResult;
+formatResult = function formatResultSci(n) {
+  if (needScientific(n)) {
+    return toScientific(n);
+  }
+  return formatResultPlain(n);
+};
+
+/** SCI 键：在「自动」与「强制」之间切换，并在副屏提示当前模式。 */
+function inputScienceToggle() {
+  sciForce = !sciForce;
+  const mode = sciForce ? '强制' : '自动';
+  // 错误态只提示模式，不改动主屏，避免把「错误」洗成别的字
+  if (isError()) {
+    showSub(`科学计数法：${mode}`);
+    return;
+  }
+  // 主屏是普通数字时，按新模式重画一次，切换立刻可见
+  const value = Number(text);
+  if (Number.isFinite(value)) {
+    text = formatResult(value);
+    show();
+  }
+  showSub(`科学计数法：${mode}`);
+}
+
+// SCI 键：追加在等号之前（同皮肤键、nPr / nCr 的做法，不动 LAYOUT / KEY_CLASS）
+const sciButton = document.createElement('button');
+sciButton.type = 'button';
+sciButton.className = 'key key--sci-toggle';
+sciButton.textContent = 'SCI';
+sciButton.title = '科学计数法显示：自动 / 强制';
+sciButton.addEventListener('click', inputScienceToggle);
+keyboard.insertBefore(sciButton, keyboard.lastElementChild);
