@@ -917,6 +917,31 @@ function clearHistory() {
   renderHistory();
 }
 
+/** 按面板顺序复制全部历史；只更新提示，不改变计算状态或历史记录。 */
+async function inputCopyHistory() {
+  if (history.length === 0) {
+    showSub('暂无历史记录可复制');
+    return;
+  }
+
+  try {
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+      showSub('历史记录复制失败');
+      return;
+    }
+
+    const content = history.map((item) => {
+      const times = historyCount(item);
+      const repeated = times > 1 ? `（重复 ${times} 次）` : '';
+      return `${item.line} ${item.result}${repeated}`;
+    }).join('\n');
+    await navigator.clipboard.writeText(content);
+    showSub('历史记录已复制');
+  } catch (e) {
+    showSub('历史记录复制失败');
+  }
+}
+
 /** 把 history 刷到面板上。 */
 function renderHistory() {
   if (!historyList) {
@@ -966,6 +991,13 @@ if (historyPanel && historyList) {
   if (title) {
     head.appendChild(title);
   }
+
+  const copyButton = document.createElement('button');
+  copyButton.type = 'button';
+  copyButton.className = 'history-clear';
+  copyButton.textContent = '复制全部';
+  copyButton.addEventListener('click', inputCopyHistory);
+  head.appendChild(copyButton);
 
   const clearButton = document.createElement('button');
   clearButton.type = 'button';
